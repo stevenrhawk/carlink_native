@@ -502,8 +502,9 @@ private fun ControlTabContent(
                 scope.launch {
                     // Save the new display mode
                     displayModePreference.setDisplayMode(newMode)
-                    // Stop adapter and exit — reboot so adapter picks up fresh Open message
-                    carlinkManager.stop(reboot = true)
+                    // Stop adapter and exit — no reboot needed, adapter picks up
+                    // fresh Open message on next init
+                    carlinkManager.stop(reboot = false)
                     kotlinx.coroutines.delay(500)
                     android.os.Process.killProcess(android.os.Process.myPid())
                 }

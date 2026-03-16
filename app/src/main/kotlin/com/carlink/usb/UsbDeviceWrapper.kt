@@ -23,6 +23,7 @@ import kotlin.coroutines.resume
 
 private const val ACTION_USB_PERMISSION = "com.carlink.USB_PERMISSION"
 private const val MAX_PAYLOAD_SIZE = 2 * 1024 * 1024 // 2MB — reject corrupted headers
+private const val INITIAL_RESPONSE_TIMEOUT_MS = 15_000L // adapter must respond within 15s of reading loop start
 
 /**
  * USB Device Wrapper for Carlinkit Adapter Communication
@@ -396,12 +397,14 @@ class UsbDeviceWrapper(
             // Pre-allocate chunk buffer for non-video message reads (audio, commands, etc.)
             val chunkBuffer = ByteArray(16384)
 
-            // Consecutive-timeout detection: if we were receiving data and then get
-            // MAX_CONSECUTIVE_TIMEOUTS in a row, the adapter has gone silent (disconnected
-            // or stalled). Report as error so auto-reconnect can kick in.
+            // Timeout detection: two separate checks —
+            // 1. Initial response: adapter MUST respond to Open within INITIAL_RESPONSE_TIMEOUT_MS.
+            //    If no data arrives at all, the USB IN endpoint is dead (adapter can't write).
+            // 2. Mid-session silence: if data was flowing and stops, adapter disconnected/stalled.
             var hasReceivedData = false
             var consecutiveTimeouts = 0
-            val maxConsecutiveTimeouts = 2 // 2 × 30s timeout = 60s of silence
+            val maxConsecutiveTimeouts = 2 // 2 × 30s timeout = 60s of mid-session silence
+            val initialResponseDeadline = System.currentTimeMillis() + INITIAL_RESPONSE_TIMEOUT_MS
 
             try {
                 while (_isReadingLoopActive.get() && _isOpened.get()) {
@@ -410,8 +413,19 @@ class UsbDeviceWrapper(
                     if (headerResult != 16) {
                         if (_isReadingLoopActive.get()) {
                             if (headerResult == -1) {
-                                // Timeout — check if adapter has gone silent
-                                if (hasReceivedData) {
+                                if (!hasReceivedData) {
+                                    // No data ever received — check initial response deadline
+                                    if (System.currentTimeMillis() >= initialResponseDeadline) {
+                                        log(
+                                            "Adapter not responding: no data received within " +
+                                                "${INITIAL_RESPONSE_TIMEOUT_MS / 1000}s of connection — " +
+                                                "USB IN endpoint may be dead",
+                                        )
+                                        callback.onError("USB read timeout — no initial response from adapter")
+                                        break
+                                    }
+                                } else {
+                                    // Was receiving data, now silent — adapter disconnected?
                                     consecutiveTimeouts++
                                     if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
                                         log(

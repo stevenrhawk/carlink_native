@@ -60,10 +60,10 @@ class AdapterDriver(
         pendingChanges: Set<String> = emptySet(),
         surfaceWidth: Int = 0,
         surfaceHeight: Int = 0,
-    ) {
+    ): Boolean {
         if (isRunning.getAndSet(true)) {
             log("Adapter already running")
-            return
+            return true
         }
 
         sessionStart.set(System.currentTimeMillis())
@@ -73,7 +73,7 @@ class AdapterDriver(
             log("USB device not opened")
             errorHandler("USB device not opened")
             isRunning.set(false)
-            return
+            return false
         }
 
         // Start heartbeat FIRST for firmware stabilization
@@ -83,18 +83,21 @@ class AdapterDriver(
         // Send initialization sequence based on mode
         val initMessages = MessageSerializer.generateInitSequence(config, initMode, pendingChanges, surfaceWidth, surfaceHeight)
         initMessagesCount = initMessages.size
+        var initFailures = 0
         log("Sending $initMessagesCount initialization messages (mode=$initMode, changes=$pendingChanges)")
 
         for ((index, message) in initMessages.withIndex()) {
             log("Init message ${index + 1}/$initMessagesCount")
             if (!send(message)) {
+                initFailures++
                 log("Failed to send init message ${index + 1}")
             }
             // Delay between messages to allow adapter firmware to process each one
             Thread.sleep(120)
         }
 
-        log("Initialization sequence completed")
+        val allSent = initFailures == 0
+        log("Initialization sequence completed (${initMessagesCount - initFailures}/$initMessagesCount sent)")
 
         // Schedule wifiConnect with timeout (matches pi-carplay behavior)
         wifiConnectTimer =
@@ -115,6 +118,8 @@ class AdapterDriver(
         // Start reading loop
         log("Starting message reading loop")
         startReadingLoop()
+
+        return allSent
     }
 
     /**

@@ -900,10 +900,12 @@ fun AdapterConfigurationDialog(
                                 adapterConfigPreference.setGpsForwarding(selectedGpsForwarding)
                                 adapterConfigPreference.setClusterNavigation(selectedClusterNavigation)
 
-                                // All adapter config changes require restart.
-                                // Schedule MainActivity launch before kill so the system
-                                // restarts into it instead of the CarApp task.
-                                carlinkManager?.stop(reboot = true)
+                                // Only reboot adapter when GPS forwarding changed —
+                                // that's the only setting that requires command injection
+                                // (riddleBoxCfg) and daemon restart. All other settings
+                                // are simple commands that take effect on next init.
+                                val needsReboot = selectedGpsForwarding != savedGpsForwarding
+                                carlinkManager?.stop(reboot = needsReboot)
                                 val launchIntent =
                                     context.packageManager
                                         .getLaunchIntentForPackage(context.packageName)

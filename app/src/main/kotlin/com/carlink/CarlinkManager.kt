@@ -95,6 +95,11 @@ class CarlinkManager(
 
         // AA touch throttling interval (AutoKit uses 17ms / ~60fps)
         private const val AA_TOUCH_THROTTLE_NS = 17_000_000L
+
+        // Pattern C: STREAMING sessions shorter than this are "short-lived" (unstable adapter)
+        private const val SHORT_SESSION_THRESHOLD_MS = 10_000L
+        // Pattern C: this many consecutive short sessions → "connection unstable"
+        private const val SHORT_SESSION_ESCALATION_COUNT = 2
     }
 
     /**
@@ -239,6 +244,18 @@ class CarlinkManager(
     // Auto-reconnect on USB disconnect
     private var reconnectJob: Job? = null
     private var reconnectAttempts: Int = 0
+
+    // Status escalation: detect degraded adapter states and give actionable user feedback.
+    // - hadPriorSession: true if PLUGGED was received at least once since last user-initiated start().
+    //   Distinguishes "adapter broken after session died" from "normal waiting for first phone".
+    // - consecutiveNoResponse: counts sequential "no initial response" errors (Pattern A: USB write dead).
+    // - shortLivedStreamingCount: counts STREAMING sessions that die within SHORT_SESSION_THRESHOLD_MS
+    //   (Pattern C: unstable rapid cycling from ZLP or firmware issue).
+    // - lastStreamingStartMs: timestamp when STREAMING was entered, for short-session detection.
+    private var hadPriorSession: Boolean = false
+    private var consecutiveNoResponse: Int = 0
+    private var shortLivedStreamingCount: Int = 0
+    private var lastStreamingStartMs: Long = 0L
 
     // Phase 13 (negotiation_failed) — prevents auto-restart loop when iPhone rejects config
     private var negotiationRejected: Boolean = false
@@ -672,18 +689,26 @@ class CarlinkManager(
         log("[INIT] Audio mode: ${if (refreshedConfig.audioTransferMode) "BLUETOOTH" else "ADAPTER"}")
 
         setStatusText("Initializing adapter...")
-        adapterDriver?.start(refreshedConfig, initMode.name, pendingChanges, actualSurfaceWidth, actualSurfaceHeight)
+        val initSuccess = adapterDriver?.start(refreshedConfig, initMode.name, pendingChanges, actualSurfaceWidth, actualSurfaceHeight) ?: false
         setStatusText("Waiting for phone...")
 
-        // Mark first init completed, store version, and clear pending changes after successful start
-        // This runs in a coroutine to handle the suspend functions
+        // Mark first init completed, store version, and clear pending changes
+        // ONLY clear pending changes if all init messages were sent successfully —
+        // otherwise the changes will be retried on next connection attempt.
         CoroutineScope(Dispatchers.IO).launch {
-            if (initMode == AdapterConfigPreference.InitMode.FULL) {
-                adapterConfigPref.markFirstInitCompleted()
-            }
-            adapterConfigPref.updateLastInitVersionCode(currentVersionCode)
-            if (pendingChanges.isNotEmpty()) {
-                adapterConfigPref.clearPendingChanges()
+            if (initSuccess) {
+                if (initMode == AdapterConfigPreference.InitMode.FULL) {
+                    adapterConfigPref.markFirstInitCompleted()
+                }
+                adapterConfigPref.updateLastInitVersionCode(currentVersionCode)
+                if (pendingChanges.isNotEmpty()) {
+                    adapterConfigPref.clearPendingChanges()
+                }
+            } else {
+                logWarn(
+                    "[INIT] Init messages failed — pending changes preserved for retry",
+                    tag = Logger.Tags.ADAPTR,
+                )
             }
         }
 
@@ -711,6 +736,9 @@ class CarlinkManager(
         stopFrameInterval()
         cancelReconnect() // Cancel any pending auto-reconnect
         negotiationRejected = false // Clear rejection flag for fresh connection
+        hadPriorSession = false // Reset escalation — user-initiated fresh start
+        consecutiveNoResponse = 0
+        shortLivedStreamingCount = 0
         currentPhoneType = null // Clear phone type on disconnect
         videoPhoneTypeInferred = false
         codecDeferred = true // Reset for next connection
@@ -1183,8 +1211,11 @@ class CarlinkManager(
                 clearPairTimeout()
                 stopFrameInterval() // Stop any existing timer (clean slate)
 
-                // Reset reconnect attempts on successful connection
+                // Reset reconnect attempts and escalation on successful connection
                 reconnectAttempts = 0
+                consecutiveNoResponse = 0
+                shortLivedStreamingCount = 0
+                hadPriorSession = true
 
                 // Store phone type for frame interval decisions during recovery
                 currentPhoneType = message.phoneType
@@ -1237,6 +1268,7 @@ class CarlinkManager(
 
                 if (state != State.STREAMING) {
                     logInfo("Video streaming started (direct processing)", tag = Logger.Tags.VIDEO)
+                    lastStreamingStartMs = System.currentTimeMillis()
                     setState(State.STREAMING)
                     setStatusText("Streaming")
 
@@ -1271,6 +1303,25 @@ class CarlinkManager(
                     // This is informational only, NOT a session termination signal
                     // Real disconnects come via UnpluggedMessage (0x04)
                     logDebug("[WIFI] Adapter WiFi status: not connected", tag = Logger.Tags.ADAPTR)
+                } else if (message.command == CommandMapping.SCANNING_DEVICE) {
+                    if (hadPriorSession && reconnectAttempts > 0) {
+                        // Pattern B: adapter alive and scanning, but phone lost after a prior session.
+                        // Adapter's wireless subsystem may be stuck.
+                        setStatusText("Adapter scanning — phone not reconnecting")
+                        logWarn(
+                            "[ESCALATION] Pattern B: adapter scanning after prior session " +
+                                "(reconnect attempt $reconnectAttempts)",
+                            tag = Logger.Tags.ADAPTR,
+                        )
+                    } else {
+                        setStatusText("Scanning for phone...")
+                    }
+                    logDebug("[CMD] SCANNING_DEVICE", tag = Logger.Tags.ADAPTR)
+                } else if (message.command == CommandMapping.BT_CONNECTED ||
+                    message.command == CommandMapping.DEVICE_FOUND
+                ) {
+                    setStatusText("Phone found — connecting...")
+                    logDebug("[CMD] ${message.command.name}", tag = Logger.Tags.ADAPTR)
                 } else if (message.command == CommandMapping.INVALID) {
                     logWarn(
                         "[CMD] Unknown command id=${message.rawId} (0x${message.rawId.toString(16)})",
@@ -1542,7 +1593,9 @@ class CarlinkManager(
     private fun setPurpose(purpose: StreamPurpose, trigger: AudioCommand) {
         val old = currentStreamPurpose
         currentStreamPurpose = purpose
-        audioManager?.onPurposeChanged(purpose)
+        if (!config.audioTransferMode) {
+            audioManager?.onPurposeChanged(purpose)
+        }
         logDebug(
             "[AUDIO_PURPOSE] $old → $purpose (trigger: ${trigger.name} voiceMode: $activeVoiceMode)",
             tag = Logger.Tags.AUDIO_DEBUG,
@@ -1552,7 +1605,9 @@ class CarlinkManager(
     /** End a stream purpose and abandon AudioFocus, reverting to MEDIA. */
     private fun endPurpose(purpose: StreamPurpose, trigger: AudioCommand) {
         currentStreamPurpose = StreamPurpose.MEDIA
-        audioManager?.onPurposeEnded(purpose)
+        if (!config.audioTransferMode) {
+            audioManager?.onPurposeEnded(purpose)
+        }
         logDebug(
             "[AUDIO_PURPOSE] Ended $purpose (trigger: ${trigger.name})",
             tag = Logger.Tags.AUDIO_DEBUG,
@@ -1713,7 +1768,12 @@ class CarlinkManager(
     }
 
     /**
-     * Simple error handler for adapter communication failures.
+     * Error handler for adapter communication failures.
+     *
+     * Performs full session cleanup (matching stop()) so that start() called
+     * from reconnect sees a clean slate. Without this, start() finds a non-null
+     * adapterDriver, calls stop(), which calls cancelReconnect() — killing the
+     * very coroutine that invoked start().
      *
      * For USB disconnects, schedules auto-reconnect with exponential backoff.
      */
@@ -1722,16 +1782,66 @@ class CarlinkManager(
 
         logError("Adapter error: $error", tag = Logger.Tags.ADAPTR)
 
+        // Full session state reset (mirrors stop() minus cancelReconnect/graceful teardown)
         stopFrameInterval()
-        codecDeferred = true // Reset for next connection
+        negotiationRejected = false
         currentPhoneType = null
+        videoPhoneTypeInferred = false
+        codecDeferred = true
+        videoEncoderType = 2
+        videoOffScreen = 0
         callback?.onPhoneTypeChanged(PhoneType.UNKNOWN)
+        clearCachedMediaMetadata()
+        activeVoiceMode = VoiceMode.NONE
+        currentStreamPurpose = StreamPurpose.MEDIA
+        stopMicrophoneCapture()
+        gnssForwarder?.stop()
 
-        // Set state to disconnected
+        // Stop adapter driver (heartbeat, reading loop) and close USB.
+        // Skip graceful teardown — USB is likely dead.
+        adapterDriver?.stop()
+        adapterDriver = null
+        usbDevice?.close()
+        usbDevice = null
+
+        if (audioInitialized) {
+            audioManager?.release()
+            audioInitialized = false
+        }
+
+        // Pattern A: track consecutive "no initial response" errors (adapter USB write dead)
+        // Pattern C: track short-lived STREAMING sessions (unstable adapter)
+        val isNoResponse = error.contains("no initial response")
+        if (isNoResponse) {
+            consecutiveNoResponse++
+        } else {
+            consecutiveNoResponse = 0
+        }
+
+        if (lastStreamingStartMs > 0) {
+            val sessionDuration = System.currentTimeMillis() - lastStreamingStartMs
+            if (sessionDuration < SHORT_SESSION_THRESHOLD_MS) {
+                shortLivedStreamingCount++
+            }
+            lastStreamingStartMs = 0L
+        }
+
         setState(State.DISCONNECTED)
 
         // Schedule auto-reconnect for USB disconnect errors
         if (isUsbDisconnectError(error)) {
+            // Escalate status based on observed patterns
+            if (consecutiveNoResponse >= 2) {
+                // Pattern A: adapter USB write dead — retrying won't help
+                setStatusText("Adapter not responding — reboot adapter")
+                logWarn("[ESCALATION] Pattern A: $consecutiveNoResponse consecutive no-response errors", tag = Logger.Tags.USB)
+            } else if (shortLivedStreamingCount >= SHORT_SESSION_ESCALATION_COUNT) {
+                // Pattern C: sessions keep dying within seconds
+                setStatusText("Connection unstable — reboot adapter")
+                logWarn("[ESCALATION] Pattern C: $shortLivedStreamingCount short-lived sessions", tag = Logger.Tags.USB)
+            } else if (isNoResponse) {
+                setStatusText("Adapter not responding — reconnecting...")
+            }
             scheduleReconnect()
         }
     }
@@ -1766,11 +1876,17 @@ class CarlinkManager(
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             logWarn(
                 "[RECONNECT] Max attempts ($MAX_RECONNECT_ATTEMPTS) reached, giving up. " +
-                    "User must manually restart.",
+                    "noResponse=$consecutiveNoResponse shortSessions=$shortLivedStreamingCount hadPrior=$hadPriorSession",
                 tag = Logger.Tags.USB,
             )
+            val giveUpMessage = when {
+                consecutiveNoResponse >= 2 -> "Adapter not responding — reboot adapter"
+                shortLivedStreamingCount >= SHORT_SESSION_ESCALATION_COUNT -> "Connection unstable — reboot adapter"
+                hadPriorSession -> "Phone not reconnecting — reboot adapter"
+                else -> "Adapter not responding — unplug and replug adapter"
+            }
             reconnectAttempts = 0
-            setStatusText("Connection failed — tap to retry")
+            setStatusText(giveUpMessage)
             // Stop FGS since we're no longer attempting to reconnect
             CarlinkMediaBrowserService.stopConnectionForeground(context)
             return
