@@ -350,6 +350,19 @@ enum class StreamPurpose {
 }
 
 /**
+ * Audio routing state flags for two-factor PCM routing.
+ *
+ * Routes audio by combining active command state with format match,
+ * rather than a single mutable purpose. This prevents transition artifacts
+ * where media PCM briefly routes to the wrong AudioTrack.
+ */
+data class AudioRoutingState(
+    val isSiriActive: Boolean = false,
+    val isPhoneCallActive: Boolean = false,
+    val isAlertActive: Boolean = false,
+)
+
+/**
  * File addresses for adapter configuration files.
  */
 enum class FileAddress(
@@ -483,8 +496,6 @@ data class AdapterConfig(
     val iBoxVersion: Int = 2,
     val packetMax: Int = 49152,
     val phoneWorkMode: Int = 2,
-    /** Night mode: false=light theme, true=dark theme for CarPlay display */
-    val nightMode: Boolean = false,
     val boxName: String = "carlink",
     val mediaDelay: Int = 1000,
     /** Audio transfer mode: true=bluetooth, false=adapter (USB audio, default) */
@@ -501,10 +512,6 @@ data class AdapterConfig(
     val handDriveMode: Int = 0,
     /** GPS forwarding: true = forward vehicle GPS to CarPlay (GNSSCapability=3), false = disabled (GNSSCapability=0) */
     val gpsForwarding: Boolean = false,
-    /** Native display width in pixels — used only for AA margin math, not sent to adapter */
-    val nativeDisplayWidth: Int = 0,
-    /** Native display height in pixels — used only for AA margin math, not sent to adapter */
-    val nativeDisplayHeight: Int = 0,
     val icon120Data: ByteArray? = null,
     val icon180Data: ByteArray? = null,
     val icon256Data: ByteArray? = null,

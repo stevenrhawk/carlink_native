@@ -99,6 +99,7 @@ fun SettingsScreen(
     fileLogManager: FileLogManager?,
     onNavigateBack: () -> Unit,
     onResetCluster: () -> Unit,
+    onReinitForDisplayMode: (DisplayMode) -> Unit = {},
 ) {
     var selectedTab by remember { mutableStateOf(SettingsTab.CONTROL) }
     val context = LocalContext.current
@@ -219,7 +220,7 @@ fun SettingsScreen(
                         .weight(1f),
             ) {
                 when (selectedTab) {
-                    SettingsTab.CONTROL -> ControlTabContent(carlinkManager, onResetCluster)
+                    SettingsTab.CONTROL -> ControlTabContent(carlinkManager, onResetCluster, onReinitForDisplayMode)
                     SettingsTab.HOME -> HomeTabContent()
                     SettingsTab.LOGS -> LogsTabContent(context, fileLogManager)
                 }
@@ -237,6 +238,7 @@ private enum class ButtonSeverity {
 private fun ControlTabContent(
     carlinkManager: CarlinkManager,
     onResetCluster: () -> Unit,
+    onReinitForDisplayMode: (DisplayMode) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -489,6 +491,10 @@ private fun ControlTabContent(
             carlinkManager = carlinkManager,
             currentDisplayMode = currentDisplayMode,
             onDismiss = { showAdapterConfigDialog = false },
+            onReinitAdapter = {
+                showAdapterConfigDialog = false
+                onReinitForDisplayMode(currentDisplayMode)
+            },
         )
     }
 
@@ -500,13 +506,17 @@ private fun ControlTabContent(
             onApplyAndRestart = { newMode ->
                 showDisplayModeDialog = false
                 scope.launch {
-                    // Save the new display mode
+                    // Save the new display mode preference
                     displayModePreference.setDisplayMode(newMode)
-                    // Stop adapter and exit — no reboot needed, adapter picks up
-                    // fresh Open message on next init
-                    carlinkManager.stop(reboot = false)
-                    kotlinx.coroutines.delay(500)
-                    android.os.Process.killProcess(android.os.Process.myPid())
+                    logInfo(
+                        "[DISPLAY_REINIT] User applied display mode: ${newMode.name} — " +
+                            "reinitializing in-place (no app kill)",
+                        tag = "UI",
+                    )
+                    // Tier-2 session restart: tear down adapter, apply new mode,
+                    // recalculate resolution, rebuild CarlinkManager.
+                    // Replaces the old Process.killProcess() approach.
+                    onReinitForDisplayMode(newMode)
                 }
             },
         )

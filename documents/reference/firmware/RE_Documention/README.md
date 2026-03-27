@@ -148,12 +148,13 @@ RE_Documention/
 
 | decode_type | Sample Rate | Purpose | Status |
 |-------------|-------------|---------|--------|
-| 2 | 44.1kHz Stereo | **Dual-purpose:** Commands (13 bytes) OR 44.1kHz audio | VERIFIED |
+| 2 | 44.1kHz Stereo | **Dual-purpose:** Commands (13 bytes) OR 44.1kHz audio (non-default, only when `mediaSound=0`) | VERIFIED |
 | 3 | 8kHz Mono | Phone call (narrowband) | Active for Android Auto phone calls (8kHz narrowband via HFP/SCO). Not used by CarPlay (uses 16kHz). See `03_Audio_Processing/microphone_processing.md` § AA Phone Call Microphone. |
-| 4 | 48kHz Stereo | Standard CarPlay HD audio | VERIFIED |
+| 4 | 48kHz Stereo | Standard media audio (default for both CarPlay and Android Auto) | VERIFIED |
 | 5 | 16kHz Mono | Voice (Siri, phone calls) | VERIFIED |
 
 **Notes:**
+- The adapter is transparent — it passes through whatever sample rate the phone negotiates. CarPlay and AA both default to 48kHz (decodeType=4). 44.1kHz (decodeType=2) only appears when explicitly configured via `mediaSound=0`.
 - decode_type=2 behavior depends on payload size - see `02_Protocol_Reference/audio_protocol.md`
 - decode_type=3 (8kHz) is active for Android Auto phone calls (HFP/SCO narrowband). Not used by CarPlay — iPhones negotiate 16kHz wideband. See `03_Audio_Processing/microphone_processing.md` § AA Phone Call Microphone — FIXED.
 - CallQuality Web UI setting has a **firmware bug** and does not affect sample rate - see `01_Firmware_Architecture/configuration.md`

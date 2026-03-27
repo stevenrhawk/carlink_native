@@ -39,6 +39,7 @@ import com.carlink.protocol.PhoneType
 import com.carlink.protocol.PluggedMessage
 import com.carlink.protocol.SessionTokenMessage
 import com.carlink.protocol.StatusValueMessage
+import com.carlink.protocol.AudioRoutingState
 import com.carlink.protocol.StreamPurpose
 import com.carlink.protocol.UnknownMessage
 import com.carlink.protocol.UnpluggedMessage
@@ -244,8 +245,10 @@ class CarlinkManager(
 
     private var activeVoiceMode = VoiceMode.NONE
 
-    // Stream purpose tracking for per-purpose AudioTracks and AudioFocus
-    private var currentStreamPurpose = StreamPurpose.MEDIA
+    // Audio routing state flags for two-factor PCM routing (replaces currentStreamPurpose)
+    @Volatile private var isSiriAudioActive = false
+    @Volatile private var isPhoneCallAudioActive = false
+    @Volatile private var isAlertAudioActive = false
 
     // GNSS
     private var gnssForwarder: GnssForwarder? = null
@@ -257,7 +260,7 @@ class CarlinkManager(
     private var pairTimeout: Timer? = null
     private var frameIntervalJob: Job? = null
 
-    // Phone type tracking for frame interval decisions
+    // Phone type tracking for keyframe request decisions
     private var currentPhoneType: PhoneType? = null
 
     // Auto-reconnect on USB disconnect
@@ -751,9 +754,9 @@ class CarlinkManager(
      * Stop and disconnect.
      */
     fun stop(reboot: Boolean = false) {
-        logDebug("[LIFECYCLE] stop() called - clearing frame interval and phoneType", tag = Logger.Tags.VIDEO)
+        logDebug("[LIFECYCLE] stop() called - clearing keyframe schedule and phoneType", tag = Logger.Tags.VIDEO)
         clearPairTimeout()
-        stopFrameInterval()
+        cancelDelayedKeyframe()
         cancelReconnect() // Cancel any pending auto-reconnect
         negotiationRejected = false // Clear rejection flag for fresh connection
         hadPriorSession = false // Reset escalation — user-initiated fresh start
@@ -767,7 +770,9 @@ class CarlinkManager(
         callback?.onPhoneTypeChanged(PhoneType.UNKNOWN)
         clearCachedMediaMetadata() // Clear stale metadata to prevent race conditions on reconnect
         activeVoiceMode = VoiceMode.NONE // Reset voice mode on disconnect
-        currentStreamPurpose = StreamPurpose.MEDIA // Reset purpose on disconnect
+        isSiriAudioActive = false
+        isPhoneCallAudioActive = false
+        isAlertAudioActive = false // Reset purpose on disconnect
         stopMicrophoneCapture()
 
         // Stop GPS forwarding before stopping adapter (only if forwarder was created)
@@ -891,7 +896,9 @@ class CarlinkManager(
         currentPhoneType = null
         callback?.onPhoneTypeChanged(PhoneType.UNKNOWN)
         activeVoiceMode = VoiceMode.NONE
-        currentStreamPurpose = StreamPurpose.MEDIA
+        isSiriAudioActive = false
+        isPhoneCallAudioActive = false
+        isAlertAudioActive = false
         setState(State.DISCONNECTED)
     }
 
@@ -956,8 +963,7 @@ class CarlinkManager(
         logInfo("[DEVICE_OPS] Resetting H264 video decoder", tag = Logger.Tags.VIDEO)
         h264Renderer?.reset()
         logInfo("[DEVICE_OPS] H264 video decoder reset completed", tag = Logger.Tags.VIDEO)
-        // Ensure frame interval running after manual reset
-        ensureFrameIntervalRunning()
+        // reset() already sends a keyframe request via keyframeCallback — no additional FRAME needed
     }
 
     /**
@@ -1130,7 +1136,12 @@ class CarlinkManager(
         if (state != State.STREAMING) return
         logInfo("[LIFECYCLE] Recovering video after overlay close", tag = Logger.Tags.VIDEO)
         h264Renderer?.flushCodec()
-        adapterDriver?.sendCommand(CommandMapping.FRAME)
+        // CarPlay: request keyframe — encoder teardown is invisible to user.
+        // AA: skip — FRAME command resets phone UI. Flushed codec will recover
+        // on next natural IDR or via watchdog/reactive keyframe.
+        if (currentPhoneType != PhoneType.ANDROID_AUTO) {
+            adapterDriver?.sendCommand(CommandMapping.FRAME)
+        }
     }
 
     // ==================== Private Methods ====================
@@ -1238,7 +1249,7 @@ class CarlinkManager(
                     )
                 }
                 clearPairTimeout()
-                stopFrameInterval() // Stop any existing timer (clean slate)
+                cancelDelayedKeyframe() // Stop any existing timer (clean slate)
 
                 // Reset reconnect attempts and escalation on successful connection
                 reconnectAttempts = 0
@@ -1246,7 +1257,7 @@ class CarlinkManager(
                 shortLivedStreamingCount = 0
                 hadPriorSession = true
 
-                // Store phone type for frame interval decisions during recovery
+                // Store phone type for keyframe request decisions during recovery
                 currentPhoneType = message.phoneType
                 logDebug("[PLUGGED] Stored currentPhoneType=$currentPhoneType", tag = Logger.Tags.VIDEO)
 
@@ -1262,10 +1273,6 @@ class CarlinkManager(
                 }
 
                 callback?.onPhoneTypeChanged(message.phoneType)
-
-                // Start frame interval for CarPlay
-                // This periodic keyframe request keeps video streaming stable
-                ensureFrameIntervalRunning()
 
                 // Enable GPS forwarding for CarPlay navigation (only if enabled in settings)
                 if (config.gpsForwarding) {
@@ -1307,8 +1314,13 @@ class CarlinkManager(
                         val sent = adapterDriver?.sendCommand(CommandMapping.FRAME) ?: false
                         logInfo("[FRAME_INTERVAL] AA one-shot keyframe request sent=$sent", tag = Logger.Tags.VIDEO)
                     } else {
-                        // Safety net: ensure frame interval running when video starts (CarPlay only)
-                        ensureFrameIntervalRunning()
+                        // CarPlay: delayed keyframe request 2.5s after first video.
+                        // The adapter's natural SPS+PPS+IDR arrives at session start and decodes
+                        // immediately. This delayed request serves as a safety net for cold-start
+                        // decoder poisoning (observed on Intel hardware, first session only).
+                        // By 2.5s the codec is warm — a fresh IDR on a warm codec clears any
+                        // poisoned state. CarPlay encoder teardown is invisible to the user.
+                        scheduleDelayedKeyframe()
                     }
                 }
                 // Video data already processed directly by videoProcessor (DIRECT_HANDOFF)
@@ -1448,11 +1460,11 @@ class CarlinkManager(
             is PhaseMessage -> {
                 if (message.phase == 13) {
                     logWarn(
-                        "[PHASE] Phase 13 (negotiation_failed) — iPhone rejected configuration",
+                        "[PHASE] Phase 13 (negotiation_failed) — Phone rejected configuration",
                         tag = Logger.Tags.ADAPTR,
                     )
                     negotiationRejected = true
-                    setStatusText("iPhone rejected configuration")
+                    setStatusText("Phone rejected configuration")
                 } else if (message.phase == 0 && negotiationRejected) {
                     logDebug(
                         "[PHASE] Phase 0 after negotiation rejection — not restarting",
@@ -1536,19 +1548,24 @@ class CarlinkManager(
         lastIncomingDecodeType = message.decodeType
 
         // Write audio with offset+length to avoid copy
+        // Two-factor routing: state flags + format match (not purpose) to prevent transition artifacts
         audioManager?.writeAudio(
             audioData,
             message.audioDataOffset,
             message.audioDataLength,
             message.audioType,
             message.decodeType,
-            currentStreamPurpose,
+            AudioRoutingState(
+                isSiriActive = isSiriAudioActive,
+                isPhoneCallActive = isPhoneCallAudioActive,
+                isAlertActive = isAlertAudioActive,
+            ),
         )
     }
 
     private fun handleAudioCommand(command: AudioCommand, messageDecodeType: Int = 5, rawCommandId: Int = command.id) {
         logDebug(
-            "[AUDIO_CMD] ${command.name} (id=${command.id} purpose=$currentStreamPurpose)",
+            "[AUDIO_CMD] ${command.name} (id=${command.id} siri=$isSiriAudioActive call=$isPhoneCallAudioActive alert=$isAlertAudioActive)",
             tag = Logger.Tags.AUDIO,
         )
 
@@ -1576,6 +1593,7 @@ class CarlinkManager(
             AudioCommand.AUDIO_SIRI_START -> {
                 logInfo("[AUDIO_CMD] Siri started - enabling microphone (mode: SIRI)", tag = Logger.Tags.MIC)
                 activeVoiceMode = VoiceMode.SIRI
+                isSiriAudioActive = true
                 setPurpose(StreamPurpose.SIRI, command)
                 startMicrophoneCapture(decodeType = 5, audioType = 3)
             }
@@ -1584,6 +1602,7 @@ class CarlinkManager(
                 val micDecodeType = lastIncomingDecodeType
                 logInfo("[AUDIO_CMD] Phone call started - enabling microphone (mode: PHONECALL, decodeType=$micDecodeType)", tag = Logger.Tags.MIC)
                 activeVoiceMode = VoiceMode.PHONECALL
+                isPhoneCallAudioActive = true
                 setPurpose(StreamPurpose.PHONE_CALL, command)
                 startMicrophoneCapture(decodeType = micDecodeType, audioType = 3)
             }
@@ -1591,19 +1610,22 @@ class CarlinkManager(
             AudioCommand.AUDIO_SIRI_STOP -> {
                 // CRITICAL: Don't stop mic if phone call is active (Siri-initiated call scenario)
                 // USB capture shows: PHONECALL_START arrives ~130ms BEFORE SIRI_STOP
+                // Always clear siri routing flag (audio routing is independent of mic lifecycle)
+                isSiriAudioActive = false
                 if (activeVoiceMode == VoiceMode.PHONECALL) {
                     logInfo(
                         "[AUDIO_CMD] Siri stopped but phone call active - keeping mic for call",
                         tag = Logger.Tags.MIC,
                     )
                     logDebug(
-                        "[AUDIO_PURPOSE] SIRI_STOP ignored: phone call active, keeping PHONE_CALL",
+                        "[AUDIO_PURPOSE] SIRI_STOP: siri routing cleared, keeping mic for PHONE_CALL",
                         tag = Logger.Tags.AUDIO_DEBUG,
                     )
-                    // Don't end SIRI purpose or revert — PHONE_CALL is active
+                    // Don't stop mic or end SIRI AudioFocus — PHONE_CALL handles both
                 } else {
                     logInfo("[AUDIO_CMD] Siri stopped - disabling microphone", tag = Logger.Tags.MIC)
                     activeVoiceMode = VoiceMode.NONE
+                    isSiriAudioActive = false
                     endPurpose(StreamPurpose.SIRI, command)
                     stopMicrophoneCapture()
                 }
@@ -1612,6 +1634,7 @@ class CarlinkManager(
             AudioCommand.AUDIO_PHONECALL_STOP -> {
                 logInfo("[AUDIO_CMD] Phone call stopped - disabling microphone", tag = Logger.Tags.MIC)
                 activeVoiceMode = VoiceMode.NONE
+                isPhoneCallAudioActive = false
                 endPurpose(StreamPurpose.PHONE_CALL, command)
                 stopMicrophoneCapture()
             }
@@ -1628,11 +1651,13 @@ class CarlinkManager(
 
             AudioCommand.AUDIO_ALERT_START -> {
                 logDebug("[AUDIO_CMD] Alert started", tag = Logger.Tags.AUDIO)
+                isAlertAudioActive = true
                 setPurpose(StreamPurpose.ALERT, command)
             }
 
             AudioCommand.AUDIO_ALERT_STOP -> {
                 logDebug("[AUDIO_CMD] Alert stopped", tag = Logger.Tags.AUDIO)
+                isAlertAudioActive = false
                 endPurpose(StreamPurpose.ALERT, command)
             }
 
@@ -1672,22 +1697,19 @@ class CarlinkManager(
         }
     }
 
-    /** Set current stream purpose and request AudioFocus. */
+    /** Request AudioFocus for a stream purpose. */
     private fun setPurpose(purpose: StreamPurpose, trigger: AudioCommand) {
-        val old = currentStreamPurpose
-        currentStreamPurpose = purpose
         if (!config.audioTransferMode) {
             audioManager?.onPurposeChanged(purpose)
         }
         logDebug(
-            "[AUDIO_PURPOSE] $old → $purpose (trigger: ${trigger.name} voiceMode: $activeVoiceMode)",
+            "[AUDIO_PURPOSE] → $purpose (trigger: ${trigger.name} voiceMode: $activeVoiceMode)",
             tag = Logger.Tags.AUDIO_DEBUG,
         )
     }
 
-    /** End a stream purpose and abandon AudioFocus, reverting to MEDIA. */
+    /** Abandon AudioFocus for a stream purpose. */
     private fun endPurpose(purpose: StreamPurpose, trigger: AudioCommand) {
-        currentStreamPurpose = StreamPurpose.MEDIA
         if (!config.audioTransferMode) {
             audioManager?.onPurposeEnded(purpose)
         }
@@ -1912,7 +1934,7 @@ class CarlinkManager(
         logError("Adapter error: $error", tag = Logger.Tags.ADAPTR)
 
         // Full session state reset (mirrors stop() minus cancelReconnect/graceful teardown)
-        stopFrameInterval()
+        cancelDelayedKeyframe()
         negotiationRejected = false
         currentPhoneType = null
         videoPhoneTypeInferred = false
@@ -1922,7 +1944,9 @@ class CarlinkManager(
         callback?.onPhoneTypeChanged(PhoneType.UNKNOWN)
         clearCachedMediaMetadata()
         activeVoiceMode = VoiceMode.NONE
-        currentStreamPurpose = StreamPurpose.MEDIA
+        isSiriAudioActive = false
+        isPhoneCallAudioActive = false
+        isAlertAudioActive = false
         stopMicrophoneCapture()
         gnssForwarder?.stop()
 
@@ -2074,67 +2098,60 @@ class CarlinkManager(
     }
 
     /**
-     * Ensures the periodic keyframe request is running for video projection sessions.
+     * Schedule keyframe requests for CarPlay sessions.
      *
-     * Safe to call multiple times - will not create duplicate jobs.
-     * Uses coroutines for better lifecycle management and error handling.
+     * 1. Initial delayed request (2.5s): The adapter sends a natural SPS+PPS+IDR at session
+     *    start which the codec decodes immediately. This delayed request serves as a cold-start
+     *    safety net — if the decoder is poisoned (observed on Intel hardware, first session only),
+     *    the fresh IDR on a now-warm codec clears the poisoned state.
      *
-     * FRAME command interval reduced from 5s to 2s to improve video recovery
-     * after H.264 decoder drift. Since adapter only sends SPS+PPS at session start,
-     * more frequent keyframe requests help recover from progressive pixelation faster.
+     * 2. Periodic interval (30s): Passive self-healing against mid-session decoder corruption
+     *    from platform instability. The GM Info 3.7 Intel Atom x7-A3960 platform has a
+     *    poorly designed VPU/USB subsystem where silent decoder corruption can occur from
+     *    USB bulk stalls, GHS hypervisor interrupts, or Intel VPU firmware bugs — factors
+     *    outside the app's control. The watchdog only catches complete decode failure (Rx>0,
+     *    Dec=0), NOT progressive quality degradation from corrupted reference frames.
+     *    A periodic IDR is the only fix for silent corruption.
+     *
+     *    CarPlay encoder teardown is invisible to the user at any reasonable interval.
+     *    The 30s value is configurable per-platform — 2s was used historically with no
+     *    user-visible impact. Shorter intervals trade iPhone encoder overhead for faster
+     *    corruption recovery. Adjust the delay value below as needed.
+     *
+     * Cancels any pending request first. AA must NOT use this — FRAME resets phone UI.
      */
     @Synchronized
-    private fun ensureFrameIntervalRunning() {
-        val phoneType = currentPhoneType
-        val jobActive = frameIntervalJob?.isActive == true
-
-        // Only for CarPlay (wired/wireless) — AA does not use periodic keyframe requests
-        if (phoneType != PhoneType.CARPLAY && phoneType != PhoneType.CARPLAY_WIRELESS) {
-            logDebug("[FRAME_INTERVAL] Skipping - phoneType=$phoneType (no video projection)", tag = Logger.Tags.VIDEO)
-            return
-        }
-
-        // Already running - nothing to do
-        if (jobActive) {
-            logDebug("[FRAME_INTERVAL] Already running - no action needed", tag = Logger.Tags.VIDEO)
-            return
-        }
-
-        logInfo("[FRAME_INTERVAL] Starting periodic keyframe request (every 2s) for CarPlay", tag = Logger.Tags.VIDEO)
-
+    private fun scheduleDelayedKeyframe() {
+        frameIntervalJob?.cancel()
         frameIntervalJob =
             scope.launch(Dispatchers.IO) {
-                // OPTIMIZATION: Send immediate keyframe request on start for faster video recovery
-                // Research: pi-carplay-main achieves near-instant recovery by not delaying first request
-                // This ensures keyframe is requested immediately after reset/resume, not after 2s delay
-                val immediateSent = adapterDriver?.sendCommand(CommandMapping.FRAME) ?: false
-                logInfo("[FRAME_INTERVAL] Immediate keyframe request sent=$immediateSent", tag = Logger.Tags.VIDEO)
+                logInfo("[FRAME_INTERVAL] CarPlay keyframe scheduled (2.5s initial, 30s periodic)", tag = Logger.Tags.VIDEO)
 
+                // Initial delayed keyframe — cold-start safety net
+                delay(2500)
+                val initialSent = adapterDriver?.sendCommand(CommandMapping.FRAME) ?: false
+                logInfo("[FRAME_INTERVAL] CarPlay initial keyframe sent=$initialSent", tag = Logger.Tags.VIDEO)
+
+                // Periodic keyframe — mid-session self-healing for unstable platforms (GM Intel VPU)
                 var requestCount = 0
                 while (isActive) {
-                    delay(2000)
+                    delay(30000)
                     requestCount++
                     val sent = adapterDriver?.sendCommand(CommandMapping.FRAME) ?: false
-                    logDebug("[FRAME_INTERVAL] Keyframe request #$requestCount sent=$sent", tag = Logger.Tags.VIDEO)
+                    logDebug("[FRAME_INTERVAL] CarPlay periodic keyframe #$requestCount sent=$sent", tag = Logger.Tags.VIDEO)
                 }
-                logDebug("[FRAME_INTERVAL] Coroutine ended after $requestCount requests", tag = Logger.Tags.VIDEO)
             }
     }
 
     /**
-     * Stops the periodic keyframe request.
+     * Cancel any pending delayed keyframe request.
      */
     @Synchronized
-    private fun stopFrameInterval() {
+    private fun cancelDelayedKeyframe() {
         val wasActive = frameIntervalJob?.isActive == true
         if (wasActive) {
-            logInfo(
-                "[FRAME_INTERVAL] Stopping periodic keyframe request (wasActive=$wasActive)",
-                tag = Logger.Tags.VIDEO,
-            )
+            logDebug("[FRAME_INTERVAL] Cancelling pending delayed keyframe", tag = Logger.Tags.VIDEO)
             frameIntervalJob?.cancel()
-        } else {
-            logDebug("[FRAME_INTERVAL] Stop called but job not active (wasActive=$wasActive)", tag = Logger.Tags.VIDEO)
         }
         frameIntervalJob = null
     }
@@ -2223,7 +2240,7 @@ class CarlinkManager(
                         currentPhoneType = PhoneType.CARPLAY
                         h264Renderer?.setAndroidAutoMode(false)
                         callback?.onPhoneTypeChanged(PhoneType.CARPLAY)
-                        ensureFrameIntervalRunning()
+                        scheduleDelayedKeyframe()
                     }
                 }
 

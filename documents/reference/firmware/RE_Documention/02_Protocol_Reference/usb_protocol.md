@@ -88,7 +88,7 @@ See `video_protocol.md` for detailed header structures and host implementation g
 
 **AudioData (0x07) Commands:** When payload is 13 bytes, it contains an audio command (not PCM data), structured as `[decodeType:4][volume:4][audioType:4][command:1]`. **IMPORTANT:** Siri and phone call events are received via AudioData (0x07), NOT Command (0x08). See the **Inbound Message Handling Reference** section below for the complete audio command table (cmds 1-14) with firmware triggers and host actions, or `audio_protocol.md` for the authoritative reference with decode_type and audio_type per command.
 
-**Audio Formats (decodeType):** Values 2 (44.1kHz stereo / commands), 4 (48kHz stereo), 5 (16kHz mono). **audio_type** values: 1=Media, 2=Nav, 3=Mic. For the complete decodeType format mapping, dual-purpose decode_type=2 behavior, and audio stream routing details, see `audio_protocol.md`.
+**Audio Formats (decodeType):** Values 4 (48kHz stereo, default), 2 (44.1kHz stereo / commands, only when `mediaSound=0`), 5 (16kHz mono). CarPlay and AA both default to 48kHz — the adapter is transparent and passes through whatever the phone negotiates. **audio_type** values: 1=Media, 2=Nav, 3=Mic. For the complete decodeType format mapping, dual-purpose decode_type=2 behavior, and audio stream routing details, see `audio_protocol.md`.
 
 ### Control Commands
 

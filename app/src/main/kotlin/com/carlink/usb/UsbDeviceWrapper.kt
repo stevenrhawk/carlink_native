@@ -230,26 +230,6 @@ class UsbDeviceWrapper(
     }
 
     /**
-     * Reset the USB device.
-     *
-     * @return true if reset was successful
-     */
-    fun reset(): Boolean {
-        connection ?: return false
-
-        return try {
-            // Note: controlTransfer with USB_DEVICE_RESET is not directly available
-            // Using close/reopen pattern for reset
-            close()
-            Thread.sleep(500)
-            open()
-        } catch (e: Exception) {
-            log("Device reset failed: ${e.message}")
-            false
-        }
-    }
-
-    /**
      * Write data to the USB device.
      *
      * @param data Data to send

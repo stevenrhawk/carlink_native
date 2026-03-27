@@ -23,8 +23,8 @@ The adapter uses a `decodeType` value (4-byte LE integer) in AudioData messages 
 
 | decodeType | Sample Rate | Channels | Bits | Use Case | Capture Status |
 |------------|-------------|----------|------|----------|----------------|
-| 1 | 44100 Hz | 2 (stereo) | 16 | Media playback (44.1kHz CD quality) | **[Not observed on USB]** |
-| 2 | 44100 Hz | 2 (stereo) | 16 | 44.1kHz media OR stop/cleanup commands (dual-purpose) | Capture-verified |
+| 1 | 44100 Hz | 2 (stereo) | 16 | Media playback when configured for 44.1kHz (`mediaSound=0`, non-default) | **[Not observed on USB]** |
+| 2 | 44100 Hz | 2 (stereo) | 16 | 44.1kHz media (non-default, only when `mediaSound=0`) OR stop/cleanup commands (dual-purpose) | Capture-verified |
 | 3 | 8000 Hz | 1 (mono) | 16 | Phone call narrow-band — active for AA phone calls (HFP/SCO 8kHz). Not used by CarPlay (uses 16kHz). | Verified (AA, Mar 2026) |
 | 4 | 48000 Hz | 2 (stereo) | 16 | Media HD / Standard CarPlay | Capture-verified |
 | 5 | 16000 Hz | 1 (mono) | 16 | Siri / Phone / Mic input | Capture-verified |
@@ -52,8 +52,8 @@ The decodeType also indicates semantic context for audio commands:
 └──────────────┘     └──────────────┘     └──────────────┘
 
 Audio Types:
-- Media: 48kHz stereo (decodeType=4) or 44.1kHz stereo (decodeType=1,2)
-- Navigation: 48kHz stereo (decodeType=4) or 44.1kHz stereo (decodeType=2)
+- Media: 48kHz stereo (decodeType=4, default) or 44.1kHz stereo (decodeType=1,2, only when `mediaSound=0`)
+- Navigation: 48kHz stereo (decodeType=4, default) or 44.1kHz stereo (decodeType=2, only when `mediaSound=0`)
 - Alerts: 48kHz stereo (decodeType=4)
 - Phone Call: 16kHz mono (decodeType=5) for CarPlay; 8kHz mono (decodeType=3) for Android Auto phone calls (HFP/SCO narrowband).
 
@@ -328,7 +328,7 @@ The firmware can write debug PCM files:
 **Answer: Minimal processing / Pass-through**
 - Audio is received from CarPlay/AndroidAuto via iAP2
 - Format is signaled to host via decodeType
-- Host must handle the format (44.1kHz, 48kHz stereo for media; 16kHz mono for CarPlay voice; 8kHz mono for AA phone calls)
+- Host must handle the format (48kHz stereo for media by default, or 44.1kHz if `mediaSound=0`; 16kHz mono for CarPlay voice; 8kHz mono for AA phone calls). CarPlay and Android Auto both default to 48kHz — the adapter is transparent and passes through whatever the phone negotiates.
 
 ### Host → Phone (Microphone)
 **Answer: YES - Active processing**

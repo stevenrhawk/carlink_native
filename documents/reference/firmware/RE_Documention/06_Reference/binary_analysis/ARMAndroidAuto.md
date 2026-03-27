@@ -367,7 +367,7 @@ onVideoStateChanged(0) → video streaming stopped
 - `bCheckManualRequestKeyFrame` — global flag controlling manual keyframe requests
 - Host should send **ONE** keyframe request at session start, then rely on natural IDRs
 - Natural IDR interval: **60-68 seconds** (encoder-configured `sync-frame-interval=60s` + encoding delay)
-- **NEVER send periodic keyframe requests to AA** — unlike CarPlay's 2s periodic requests
+- **NEVER send periodic keyframe requests to AA** — unlike CarPlay (where encoder teardown is invisible), AA FRAME commands cause a visible UI refresh animation (fade-out/fade-in). Periodic requests make the AA UI unusable. CarPlay uses a 30s periodic interval as a mitigation for GM Intel VPU mid-session corruption — this interval is configurable per-platform (2s was used historically with no user-visible impact on CarPlay), but must never be applied to AA
 
 ### Video Focus Modes
 

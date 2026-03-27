@@ -44,7 +44,6 @@ class AdapterDriver(
     private val receiveErrors = AtomicInteger(0)
     private val heartbeatsSent = AtomicInteger(0)
     private val sessionStart = AtomicLong(0)
-    private val lastHeartbeat = AtomicLong(0)
     private var initMessagesCount = 0
 
     /**
@@ -218,11 +217,6 @@ class AdapterDriver(
         return send(MessageSerializer.serializeRebootAdapter())
     }
 
-    fun resetUsb(): Boolean {
-        log("[SEND] USB reset (0xCE)")
-        return send(MessageSerializer.serializeUsbReset())
-    }
-
     fun disconnectPhone(): Boolean {
         log("[SEND] Disconnect phone (0x0F)")
         return send(MessageSerializer.serializeDisconnectPhone())
@@ -265,7 +259,6 @@ class AdapterDriver(
                             // which would stop all heartbeats and cause adapter disconnect.
                             try {
                                 if (isRunning.get()) {
-                                    lastHeartbeat.set(System.currentTimeMillis())
                                     heartbeatsSent.incrementAndGet()
                                     if (!send(MessageSerializer.serializeHeartbeat())) {
                                         log("Heartbeat send failed (count: $heartbeatsSent)")
@@ -384,7 +377,6 @@ class AdapterDriver(
         receiveErrors.set(0)
         heartbeatsSent.set(0)
         sessionStart.set(0)
-        lastHeartbeat.set(0)
         initMessagesCount = 0
     }
 

@@ -427,7 +427,7 @@ This cycle takes ~3ms, visible as a brief PTS gap around each keyframe.
 - Runs 3-6 correctly suppressed FRAME (0 commands sent)
 - **Natural IDR interval: 62-68s** (encoder `sync-frame-interval=60000000` μs)
 - No external keyframe control available — decoder must wait for next natural IDR
-- **Contrast with CarPlay**: 2s forced keyframe cycle via `Command FRAME` → AVE encoder restart
+- **Contrast with CarPlay**: Periodic forced keyframe cycle via `Command FRAME` → AVE encoder restart (2.5s initial, 30s periodic). The periodic interval is a mitigation for the GM Info 3.7 (Intel Atom x7-A3960) platform, where the Intel VPU can silently corrupt decoder state mid-session due to USB stalls, hypervisor interrupts, or VPU firmware bugs outside the app's control. CarPlay encoder teardown is invisible to the user at any reasonable interval. The 30s value can be adjusted per-platform — 2s was used historically with no user-visible impact, shorter intervals trade iPhone encoder overhead for faster corruption recovery
 
 ---
 
@@ -571,8 +571,8 @@ AA boot-screen IDR poisoning is **deterministic and severe** — far worse than 
 |--------|---------|-------------|
 | First IDR size | 1,206–90,549B (variable) | **2,735B (identical all 6 runs, all 10 sync events)** |
 | Bits/pixel | Variable | 0.024 bits/pixel — near-empty boot-screen |
-| Poisoning window | ~2s (next ForceKeyFrame clears) | **60-70s** (no forced keyframe mitigation) |
-| Natural IDR size | N/A (forced every 2s) | 49,792-58,654B (18-21× larger than boot-screen) |
+| Poisoning window | ~30s (next ForceKeyFrame clears, configurable) | **60-70s** (no forced keyframe mitigation) |
+| Natural IDR size | N/A (forced every 30s, configurable) | 49,792-58,654B (18-21× larger than boot-screen) |
 
 The 2,735B IDR encodes the AA startup animation — a nearly uniform dark background that compresses to <3KB for 921,600 pixels (1280×720). All subsequent P-frames reference this degenerate IDR until the next natural IDR at ~65 seconds.
 

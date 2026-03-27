@@ -14,8 +14,11 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.carlink.logging.logError
 import com.carlink.logging.logInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 private val Context.adapterConfigDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "carlink_adapter_config_preferences",
@@ -517,6 +520,22 @@ class AdapterConfigPreference private constructor(
             logError("Failed to save video resolution preference: $e", tag = "AdapterConfig")
             throw e
         }
+    }
+
+    /**
+     * Set video resolution synchronously (sync cache only).
+     * Used during display mode reinit where the 200ms handler must read the updated value
+     * immediately. The DataStore write is deferred to next setVideoResolution() call.
+     */
+    fun setVideoResolutionSync(config: VideoResolutionConfig) {
+        val storageValue = config.toStorageString()
+        syncCache.edit().putString(SYNC_CACHE_KEY_VIDEO_RESOLUTION, storageValue).apply()
+        // DataStore pending change write is async — fire and forget since the sync cache
+        // is the source of truth for getUserConfigSync() reads during reinit.
+        CoroutineScope(Dispatchers.IO).launch {
+            addPendingChange(ConfigKey.VIDEO_RESOLUTION)
+        }
+        logInfo("Video resolution sync cache updated: $storageValue", tag = "AdapterConfig")
     }
 
     val fpsFlow: Flow<FpsConfig> =
