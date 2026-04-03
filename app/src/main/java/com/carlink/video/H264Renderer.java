@@ -190,6 +190,28 @@ public class H264Renderer {
     private volatile long lastReactiveKeyframeTimeNs = 0;
     private static final long REACTIVE_KEYFRAME_COOLDOWN_NS = 500_000_000L;  // 500ms
 
+    // Resume/black-screen fix: reset throttling
+    private static final long MIN_RESET_INTERVAL_MS = 500;
+    private static final int MAX_RAPID_RESETS = 3;
+    private static final long RESET_WINDOW_MS = 5000;
+    private static final long RESET_COOLDOWN_MS = 2000;
+    private static final long MIN_STARTUP_TIME_MS = 2000;
+    private long lastResetTime = 0;
+    private int resetsInWindow = 0;
+    private long windowStartTime = 0;
+    private boolean inCooldown = false;
+    private long codecStartTime = 0;
+
+    // Resume/black-screen fix: keyframe detection after resume
+    private static final int KEYFRAME_REQUEST_THRESHOLD = 15;
+    private static final long KEYFRAME_REQUEST_TIME_THRESHOLD_MS = 5000;
+    private static final long KEYFRAME_REQUEST_COOLDOWN_MS = 2000;
+    private volatile long framesReceivedSinceReset = 0;
+    private volatile long framesDecodedSinceReset = 0;
+    private volatile long resetTimestamp = 0;
+    private volatile boolean pendingKeyframeRequest = false;
+    private volatile long lastKeyframeRequestTime = 0;
+
     // Sync codec timeouts (microseconds)
     private static final long DEQUEUE_INPUT_TIMEOUT_US = 100_000L;   // 100ms
     private static final long DEQUEUE_OUTPUT_TIMEOUT_US = 100_000L;  // 100ms
@@ -352,6 +374,14 @@ public class H264Renderer {
         try {
             initCodec(width, height, surface);
             mCodec.start();
+            codecStartTime = System.currentTimeMillis();
+            framesReceivedSinceReset = 0;
+            framesDecodedSinceReset = 0;
+            resetTimestamp = 0;
+            pendingKeyframeRequest = false;
+            windowStartTime = System.currentTimeMillis();
+            resetsInWindow = 0;
+            inCooldown = false;
             initStaging();
             startWatchdog();
             log("Codec started (sync mode)");
@@ -417,9 +447,44 @@ public class H264Renderer {
 
     public void reset() {
         synchronized (codecLock) {
+            long now = System.currentTimeMillis();
+
+            // Throttle: skip if too soon after last reset
+            if (now - lastResetTime < MIN_RESET_INTERVAL_MS) {
+                log("[RESET_THROTTLE] Skipped — too soon (" + (now - lastResetTime) + "ms since last)");
+                return;
+            }
+
+            // Throttle: skip during initial codec stabilization
+            if (codecStartTime > 0 && now - codecStartTime < MIN_STARTUP_TIME_MS) {
+                log("[RESET_THROTTLE] Skipped — codec still stabilizing (" + (now - codecStartTime) + "ms)");
+                return;
+            }
+
+            // Throttle: cooldown after rapid resets
+            if (inCooldown) {
+                if (now - lastResetTime < RESET_COOLDOWN_MS) {
+                    log("[RESET_THROTTLE] Skipped — in cooldown (" + (now - lastResetTime) + "ms)");
+                    return;
+                }
+                inCooldown = false;
+            }
+
+            // Track rapid resets
+            if (now - windowStartTime > RESET_WINDOW_MS) {
+                windowStartTime = now;
+                resetsInWindow = 0;
+            }
+            resetsInWindow++;
+            if (resetsInWindow >= MAX_RAPID_RESETS) {
+                log("[RESET_THROTTLE] Rapid reset detected (" + resetsInWindow + " in window) — entering cooldown");
+                inCooldown = true;
+            }
+
+            lastResetTime = now;
             long resetCount = codecResetCount.incrementAndGet();
             log("Reset #" + resetCount);
-            lastLifecycleEventTime = System.currentTimeMillis();
+            lastLifecycleEventTime = now;
 
             Surface savedSurface = this.surface;
             stop();
@@ -457,22 +522,42 @@ public class H264Renderer {
                 try {
                     mCodec.setOutputSurface(newSurface);
                     this.surface = newSurface;
+                    // Enable keyframe detection — surface swap may leave decoder needing new IDR
+                    pendingKeyframeRequest = true;
+                    framesReceivedSinceReset = 0;
+                    framesDecodedSinceReset = 0;
+                    resetTimestamp = System.currentTimeMillis();
                     log("[LIFECYCLE] Surface swapped without restart");
-                    return;
+                    // Fall through to request keyframe below (don't return)
                 } catch (Exception e) {
                     log("[LIFECYCLE] setOutputSurface failed, doing full restart: " + e.getMessage());
+                    // Full restart needed
+                    stop();
+                    this.surface = newSurface;
+                    start();
+
+                    // AA: replay cached frames through fresh decoder for faster recovery
+                    if (androidAutoMode) {
+                        replayFrameCache();
+                    }
+                }
+            } else {
+                // Full restart needed (codec not running)
+                stop();
+                this.surface = newSurface;
+                start();
+
+                // AA: replay cached frames through fresh decoder for faster recovery
+                if (androidAutoMode) {
+                    replayFrameCache();
                 }
             }
 
-            // Full restart needed (codec not running or setOutputSurface failed)
-            stop();
-            this.surface = newSurface;
-            start();
-
-            // AA: replay cached frames through fresh decoder for faster recovery
-            if (androidAutoMode) {
-                replayFrameCache();
-            }
+            // Enable keyframe detection for both paths
+            pendingKeyframeRequest = true;
+            framesReceivedSinceReset = 0;
+            framesDecodedSinceReset = 0;
+            resetTimestamp = System.currentTimeMillis();
         }
 
         if (keyframeCallback != null) {
@@ -543,6 +628,9 @@ public class H264Renderer {
 
             long now = System.currentTimeMillis();
             if (now - lastLifecycleEventTime < WATCHDOG_GRACE_PERIOD_MS) return;
+
+            // Resume fix: skip watchdog during initial codec stabilization
+            if (codecStartTime > 0 && now - codecStartTime < MIN_STARTUP_TIME_MS) return;
 
             long currentReceived = sessionFramesReceived.get();
             long currentDecoded = sessionFramesDecoded.get();
@@ -758,6 +846,31 @@ public class H264Renderer {
                     decodeFrame(frame);
                     framePool.offer(frame);
 
+                    // Resume fix: detect stuck decoder (frames in, no output) and re-request keyframe
+                    if (pendingKeyframeRequest) {
+                        framesReceivedSinceReset++;
+                        long now = System.currentTimeMillis();
+                        boolean thresholdReached = framesReceivedSinceReset >= KEYFRAME_REQUEST_THRESHOLD
+                                || (resetTimestamp > 0 && now - resetTimestamp >= KEYFRAME_REQUEST_TIME_THRESHOLD_MS);
+                        if (thresholdReached && framesDecodedSinceReset == 0
+                                && now - lastKeyframeRequestTime > KEYFRAME_REQUEST_COOLDOWN_MS) {
+                            lastKeyframeRequestTime = now;
+                            framesReceivedSinceReset = 0;
+                            resetTimestamp = now;
+                            KeyframeRequestCallback cb = keyframeCallback;
+                            if (cb != null) {
+                                executors.mediaCodec1().execute(() -> {
+                                    try {
+                                        cb.onKeyframeNeeded();
+                                        log("[RESUME_FIX] Re-requested keyframe — decoder stuck (frames in, no output)");
+                                    } catch (Exception e) {
+                                        log("[RESUME_FIX] Keyframe re-request failed: " + e);
+                                    }
+                                });
+                            }
+                        }
+                    }
+
                     // Fix A: After feeding, check if a staging drop occurred -> request reactive keyframe
                     if (stagingOverwriteDetected) {
                         stagingOverwriteDetected = false;
@@ -938,6 +1051,14 @@ public class H264Renderer {
                             totalFramesDecoded.incrementAndGet();
                             sessionFramesDecoded.incrementAndGet();
                             lastRenderTime = System.currentTimeMillis();
+
+                            // Resume fix: track decoded frames, disable keyframe detection after recovery
+                            framesDecodedSinceReset++;
+                            if (pendingKeyframeRequest && framesDecodedSinceReset >= 3) {
+                                pendingKeyframeRequest = false;
+                                log("[RESUME_FIX] Decoder producing output — keyframe detection disabled");
+                            }
+
                             if (!firstFrameLogged) {
                                 firstFrameLogged = true;
                                 log("[VIDEO] First frame decoded");

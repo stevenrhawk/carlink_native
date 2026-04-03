@@ -139,6 +139,40 @@
             android:name="androidx.car.app.minCarApiLevel"
             android:value="6" />
 
+        <!-- Voice Interaction Service — registers as voice assistant for Siri PTT passthrough -->
+        <service
+            android:name=".service.voice.CarlinkVoiceInteractionService"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true">
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+
+        <!-- Voice Interaction Session Service -->
+        <service
+            android:name=".service.voice.CarlinkVoiceInteractionSessionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true" />
+
+        <!-- Recognition Service (stub — actual recognition handled by Siri via CarPlay) -->
+        <service
+            android:name=".service.voice.CarlinkRecognitionService"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/recognition_service" />
+        </service>
+
         <!-- APPLICATION-LEVEL DISTRACTION OPTIMIZATION DECLARATION -->
         <meta-data
             android:name="com.android.automotive.application.DISTRACTION_OPTIMIZED"

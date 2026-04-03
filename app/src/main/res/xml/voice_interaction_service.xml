@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.carlink.service.voice.CarlinkVoiceInteractionSessionService"
+    android:recognitionService="com.carlink.service.voice.CarlinkRecognitionService"
+    android:settingsActivity="com.carlink.MainActivity"
+    android:supportsAssist="true"
+    android:supportsLocalInteraction="true" />
