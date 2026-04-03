@@ -12,7 +12,7 @@ android {
 //###############################################
 
     defaultConfig {
-        applicationId = "zeno.carlink"
+        applicationId = "com.afterhourstech.cpaaplayer"
         minSdk = 32
         targetSdk = 36
         versionCode = 103
