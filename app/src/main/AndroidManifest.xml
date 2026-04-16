@@ -178,14 +178,10 @@
             android:name="com.android.automotive.application.DISTRACTION_OPTIMIZED"
             android:value="true" />
 
-        <!-- Shim for Templates Host's unregistered ClusterIconContentProvider.
-             Claims the orphaned authority so icon delivery works for cluster display. -->
-        <provider
-            android:name=".provider.ClusterIconShimProvider"
-            android:authorities="com.google.android.apps.automotive.templates.host.ClusterIconContentProvider"
-            android:exported="true"
-            android:grantUriPermissions="true"
-            tools:ignore="ExportedContentProvider" />
+        <!-- ClusterIconContentProvider shim removed for Play Store compatibility.
+             The authority is claimed by another developer globally. The shim only works
+             when sideloading. NavigationStateManager detects its absence at runtime and
+             disables AA bitmap icon delivery gracefully. -->
 
     </application>
 

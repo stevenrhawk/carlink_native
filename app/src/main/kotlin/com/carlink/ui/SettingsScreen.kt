@@ -86,6 +86,7 @@ import com.carlink.ui.settings.DisplayModePreference
 import com.carlink.ui.settings.LogsTabContent
 import com.carlink.ui.settings.PhonesTabContent
 import com.carlink.ui.settings.SettingsTab
+import com.carlink.ui.settings.VehicleDataTab
 import com.carlink.ui.theme.AutomotiveDimens
 import kotlinx.coroutines.launch
 
@@ -219,6 +220,7 @@ fun SettingsScreen(
                 when (selectedTab) {
                     SettingsTab.CONTROL -> ControlTabContent(carlinkManager, onResetCluster, onReinitForDisplayMode)
                     SettingsTab.PHONES -> PhonesTabContent(carlinkManager)
+                    SettingsTab.VEHICLE -> VehicleDataTab()
                     SettingsTab.LOGS -> LogsTabContent(context, fileLogManager)
                 }
             }

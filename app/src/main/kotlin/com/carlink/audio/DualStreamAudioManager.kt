@@ -80,6 +80,7 @@ class DualStreamAudioManager(
     private val context: Context,
     private val logCallback: LogCallback,
     private val audioConfig: AudioConfig = AudioConfig.DEFAULT,
+    private val busRouter: AudioBusRouter = AudioBusRouter.noOp(context),
 ) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     // Audio tracks for each stream type (maps to AAOS CarAudioContext)
@@ -743,6 +744,7 @@ class DualStreamAudioManager(
                 "navEndMarkersDetected" to navEndMarkersDetected,
                 "navWarmupFramesSkipped" to navWarmupFramesSkipped,
                 "zeroPacketsFiltered" to zeroPacketsFiltered,
+                "busRouter" to busRouter.getStats(),
             )
         }
     }
@@ -1469,6 +1471,9 @@ class DualStreamAudioManager(
                     .setPerformanceMode(audioConfig.performanceMode)
                     .build()
 
+            // Route to GM AAOS hardware bus if available (no-op on non-GM platforms)
+            val busRouted = busRouter.routeOutputTrack(track, streamType)
+
             // Set initial volume based on stream type
             val volume =
                 when (streamType) {
@@ -1480,9 +1485,10 @@ class DualStreamAudioManager(
                 }
             track.setVolume(volume)
 
+            val busInfo = if (busRouted) " bus=routed" else ""
             log(
                 "[AUDIO] Created $streamName AudioTrack: ${format.sampleRate}Hz " +
-                    "${format.channelCount}ch buffer=${bufferSize}B usage=$usage",
+                    "${format.channelCount}ch buffer=${bufferSize}B usage=$usage$busInfo",
             )
 
             return track

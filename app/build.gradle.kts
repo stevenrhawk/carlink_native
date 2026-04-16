@@ -1,21 +1,44 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.github.triplet.play")
 }
+
+// Load keystore password from .env file
+// File lives outside repo: D:\android-dev\carplay-exploartion\.env
+// Format: KEYSTORE_PASSWORD="password"
+val envFile = rootProject.file("../.env")
+val keystorePassword: String = if (envFile.exists()) {
+    envFile.readLines()
+        .firstOrNull { it.startsWith("KEYSTORE_PASSWORD=") }
+        ?.substringAfter("=")
+        ?.trim()
+        ?.removeSurrounding("\"")
+        ?: ""
+} else ""
 
 android {
     namespace = "com.carlink"
     compileSdk = 36
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("D:/android-dev/android-keystore")
+            storePassword = keystorePassword
+            keyAlias = "key0"
+            keyPassword = keystorePassword
+        }
+    }
 
 //###############################################
 //###############################################
 //###############################################
 
     defaultConfig {
-        applicationId = "com.afterhourstech.cpaaplayer"
+        applicationId = "com.trimline.carplay"
         minSdk = 32
         targetSdk = 36
-        versionCode = 103
+        versionCode = 111
         versionName = "1.0.0"
 
 //###############################################
@@ -32,6 +55,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -54,6 +78,10 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // android.car API for reading vehicle properties (speed, fuel, etc.)
+    // This is a system framework library available on AAOS devices
+    useLibrary("android.car")
 
     lint {
         // Suppress DiscouragedApi warning for scheduleAtFixedRate usage.
@@ -106,5 +134,13 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// Play Store publishing configuration
+play {
+    serviceAccountCredentials.set(file("D:/android-dev/carplay-exploartion/trimline-fire-c1dbdb1b099a.json"))
+    track.set("internal")
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.DRAFT)
+    defaultToAppBundles.set(true)
 }
 

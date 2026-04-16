@@ -2,6 +2,7 @@ package com.carlink.ui.settings
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -13,6 +14,7 @@ enum class SettingsTab(
 ) {
     PHONES("Phones", Icons.Default.PhoneAndroid),
     CONTROL("Control", Icons.Default.Settings),
+    VEHICLE("Vehicle", Icons.Default.DirectionsCar),
     LOGS("Logs", Icons.AutoMirrored.Filled.Article),
     ;
 

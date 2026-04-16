@@ -5,6 +5,7 @@ import android.hardware.usb.UsbManager
 import android.os.PowerManager
 import android.view.Surface
 import androidx.core.content.edit
+import com.carlink.audio.AudioBusRouter
 import com.carlink.audio.DualStreamAudioManager
 import com.carlink.audio.MicrophoneCaptureManager
 import com.carlink.gnss.GnssForwarder
@@ -585,19 +586,30 @@ class CarlinkManager(
 
         logInfo("Video subsystem initialized, codec deferred until phone type known", tag = Logger.Tags.VIDEO)
 
-        // Initialize audio manager with platform-specific config
+        // Initialize audio bus router for GM AAOS hardware bus discovery
+        // On GM AAOS, routes phone call audio to dedicated telephony bus (bus4_call_out / Call_In_Mic)
+        // On non-GM platforms, this is a no-op — standard AudioAttributes routing is used
+        val busRouter = AudioBusRouter(context, isGmAaos = platformInfo.isGmAaos)
+        if (busRouter.hasGmBuses) {
+            logInfo("[PLATFORM] GM AAOS audio buses discovered, call audio will use dedicated telephony bus",
+                tag = Logger.Tags.AUDIO)
+        }
+
+        // Initialize audio manager with platform-specific config and bus routing
         audioManager =
             DualStreamAudioManager(
                 context,
                 logCallback,
                 audioConfig,
+                busRouter,
             )
 
-        // Initialize microphone manager
+        // Initialize microphone manager with bus routing for call input
         microphoneManager =
             MicrophoneCaptureManager(
                 context,
                 logCallback,
+                busRouter,
             )
 
         // Initialize GNSS forwarder for GPS → adapter → CarPlay pipeline (only if enabled)

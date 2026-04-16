@@ -73,3 +73,5 @@ logs/
 secrets.properties
 credentials.json
 google-services.json
+**/service-account*.json
+**/trimline-fire*.json

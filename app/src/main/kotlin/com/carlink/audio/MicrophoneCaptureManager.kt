@@ -90,6 +90,7 @@ object MicFormats {
 class MicrophoneCaptureManager(
     private val context: Context,
     private val logCallback: LogCallback,
+    private val busRouter: AudioBusRouter? = null,
 ) {
     private var audioRecord: AudioRecord? = null
     private var micBuffer: AudioRingBuffer? = null
@@ -182,13 +183,20 @@ class MicrophoneCaptureManager(
                 totalBytesCapture = 0
                 overrunCount = 0
 
+                // Route to GM AAOS call input bus if this is a phone call capture
+                val isCallCapture = (decodeType == 3)
+                val busRouted = audioRecord?.let {
+                    busRouter?.routeInputRecord(it, isCallCapture)
+                } ?: false
+
                 audioRecord?.startRecording()
                 isRunning.set(true)
                 captureThread = MicCaptureThread(format).also { it.start() }
 
+                val busInfo = if (busRouted) " bus=routed" else ""
                 log(
                     "[MIC] Capture started: ${format.sampleRate}Hz ${format.channelCount}ch " +
-                        "buffer=${recordBufferSize}B",
+                        "buffer=${recordBufferSize}B$busInfo",
                 )
                 return true
             } catch (e: SecurityException) {
