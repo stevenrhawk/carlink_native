@@ -1,8 +1,6 @@
 package com.carlink.ui.settings
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.pm.PackageManager
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -649,25 +647,6 @@ class AdapterConfigPreference private constructor(
             logError("Failed to save cluster navigation preference: $e", tag = "AdapterConfig")
             throw e
         }
-    }
-
-    /**
-     * Apply the cluster service component enabled/disabled state based on preference.
-     * Call this early in Activity.onCreate() so the state is set before Templates Host discovers it.
-     */
-    fun applyClusterComponentState(context: Context) {
-        val enabled = getClusterNavigationSync()
-        val newState =
-            if (enabled) {
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-            } else {
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-            }
-        context.packageManager.setComponentEnabledSetting(
-            ComponentName(context, "com.carlink.cluster.CarlinkClusterService"),
-            newState,
-            PackageManager.DONT_KILL_APP,
-        )
     }
 
     data class UserConfig(
