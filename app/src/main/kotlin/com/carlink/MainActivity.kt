@@ -144,6 +144,47 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    /**
+     * BroadcastReceiver for USB device attachment events.
+     *
+     * Catches adapter re-enumeration that occurs after the initial findDevice()
+     * polling window (30s) has expired. Without this, the user must manually
+     * press "Reset Device" to trigger a new search.
+     *
+     * More reliable than onNewIntent(ACTION_USB_DEVICE_ATTACHED) on AAOS,
+     * where intent delivery to singleTop activities is not guaranteed.
+     */
+    private val usbAttachReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                if (UsbManager.ACTION_USB_DEVICE_ATTACHED == intent.action) {
+                    val device =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                        }
+
+                    device?.let {
+                        // Only handle if it's a known Carlinkit device
+                        if (KnownDevices.isKnownDevice(it.vendorId, it.productId)) {
+                            logInfo(
+                                "[USB_ATTACH] Carlinkit device attached: VID=0x${it.vendorId.toString(16)} " +
+                                    "PID=0x${it.productId.toString(16)} path=${it.deviceName}",
+                                tag = "MAIN",
+                            )
+                            // Notify CarlinkManager of the attachment (null-safe)
+                            carlinkManager?.onUsbDeviceAttached()
+                        }
+                    }
+                }
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -173,6 +214,10 @@ class MainActivity : ComponentActivity() {
 
         // Register USB detachment receiver for immediate disconnect detection
         registerUsbDetachReceiver()
+
+        // Register USB attachment receiver to auto-connect when adapter appears
+        // after the initial findDevice() polling window has expired
+        registerUsbAttachReceiver()
 
         // Launch CarAppActivity to trigger Templates Host → cluster binding chain.
         // Skipped entirely when cluster navigation is disabled — no reason to start
@@ -261,8 +306,9 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
 
-        // Unregister USB detachment receiver
+        // Unregister USB receivers
         unregisterUsbDetachReceiver()
+        unregisterUsbAttachReceiver()
 
         // Release resources (null-safe in case Activity destroyed before init completed)
         carlinkManager?.release()
@@ -800,6 +846,35 @@ class MainActivity : ComponentActivity() {
         } catch (e: IllegalArgumentException) {
             // Receiver was not registered or already unregistered
             logWarn("[USB_DETACH] Receiver already unregistered: ${e.message}", tag = "MAIN")
+        }
+    }
+
+    /**
+     * Registers the USB attachment BroadcastReceiver.
+     *
+     * This enables automatic connection when the adapter re-enumerates
+     * after the initial findDevice() polling window has expired.
+     */
+    private fun registerUsbAttachReceiver() {
+        val filter = IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbAttachReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbAttachReceiver, filter)
+        }
+        logInfo("[USB_ATTACH] Registered USB attachment receiver", tag = "MAIN")
+    }
+
+    /**
+     * Unregisters the USB attachment BroadcastReceiver.
+     */
+    private fun unregisterUsbAttachReceiver() {
+        try {
+            unregisterReceiver(usbAttachReceiver)
+            logInfo("[USB_ATTACH] Unregistered USB attachment receiver", tag = "MAIN")
+        } catch (e: IllegalArgumentException) {
+            // Receiver was not registered or already unregistered
+            logWarn("[USB_ATTACH] Receiver already unregistered: ${e.message}", tag = "MAIN")
         }
     }
 }
