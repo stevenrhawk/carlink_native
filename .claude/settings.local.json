@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api *)",
+      "Bash(xargs grep *)",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\); JSON.parse\\(d\\).forEach\\(f=>console.log\\(f.filename\\)\\)\")",
+      "Bash(node -e ' *)"
+    ]
+  }
+}
