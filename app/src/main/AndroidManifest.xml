@@ -114,10 +114,11 @@
                 android:value="HIDDEN" />
         </service>
 
-        <!-- Cluster Navigation CarAppService (headless — no UI on main display) -->
+        <!-- Cluster CarAppService — always enabled for vehicle data collection via
+             CarHardwareManager. Navigation relay is conditional on user preference. -->
         <service
             android:name=".cluster.CarlinkClusterService"
-            android:enabled="false"
+            android:enabled="true"
             android:exported="true"
             tools:ignore="ExportedService">
             <intent-filter>

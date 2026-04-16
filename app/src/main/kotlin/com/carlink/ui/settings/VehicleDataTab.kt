@@ -20,57 +20,37 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.carlink.platform.VehicleDataReader
-import com.carlink.platform.VehicleDataReader.PropertyResult
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.carlink.platform.PropertyResult
+import com.carlink.platform.VehicleData
+import com.carlink.platform.VehicleDataFormatter
+import com.carlink.platform.VehicleDataManager
 import com.carlink.ui.theme.AutomotiveDimens
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-/**
- * Vehicle Data diagnostics tab for the settings screen.
- *
- * Reads vehicle properties from CarPropertyManager and displays results.
- * Shows which properties are readable, permission-denied, or unavailable.
- * This is a diagnostic tool to determine what vehicle data could be forwarded
- * to CarPlay via the Carlinkit dongle.
- */
 @Composable
 fun VehicleDataTab() {
-    val context = LocalContext.current
     val view = LocalView.current
-    val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
-
-    var results by remember { mutableStateOf<List<PropertyResult>?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
-    var lastReadTime by remember { mutableStateOf<Long?>(null) }
-
-    val reader = remember { VehicleDataReader(context) }
+    val vehicleData by VehicleDataManager.state.collectAsStateWithLifecycle()
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -84,146 +64,150 @@ fun VehicleDataTab() {
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // Header card with scan button
-            VehicleCard(
-                title = "Vehicle Properties",
-                icon = Icons.Default.DirectionsCar,
-            ) {
-                Text(
-                    text = "Reads vehicle data from AAOS CarPropertyManager. " +
-                        "Shows which properties are accessible to this app on your GM head unit.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    FilledTonalButton(
-                        onClick = {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                            scope.launch {
-                                isLoading = true
-                                results = withContext(Dispatchers.IO) {
-                                    reader.readAll()
-                                }
-                                lastReadTime = System.currentTimeMillis()
-                                isLoading = false
-                            }
-                        },
-                        enabled = !isLoading,
-                        modifier = Modifier.height(AutomotiveDimens.ButtonMinHeight),
+            when (vehicleData.status) {
+                VehicleData.ConnectionStatus.WAITING_FOR_SERVICE -> {
+                    VehicleCard(
+                        title = "Vehicle Properties",
+                        icon = Icons.Default.DirectionsCar,
                     ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (results == null) "Scan Properties" else "Rescan")
-                    }
-
-                    if (results != null) {
-                        val okCount = results!!.count { it.status == PropertyResult.Status.OK }
-                        val total = results!!.size
                         Text(
-                            text = "$okCount / $total readable",
+                            text = "Waiting for vehicle data service to connect. " +
+                                "The Templates Host needs to bind to the Carlink service.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = colorScheme.onSurfaceVariant,
                         )
                     }
                 }
-            }
 
-            // Results
-            if (results != null) {
-                // Readable properties
-                val readable = results!!.filter { it.status == PropertyResult.Status.OK }
-                if (readable.isNotEmpty()) {
+                VehicleData.ConnectionStatus.ERROR -> {
                     VehicleCard(
-                        title = "Readable (${readable.size})",
-                        icon = Icons.Default.CheckCircle,
-                    ) {
-                        readable.forEachIndexed { index, result ->
-                            PropertyRow(result)
-                            if (index < readable.lastIndex) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                        }
-                    }
-                }
-
-                // Permission denied
-                val denied = results!!.filter { it.status == PropertyResult.Status.PERMISSION_DENIED }
-                if (denied.isNotEmpty()) {
-                    VehicleCard(
-                        title = "Permission Denied (${denied.size})",
-                        icon = Icons.Default.Lock,
-                    ) {
-                        Text(
-                            text = "These properties exist but require system-level permissions " +
-                                "that GM has not granted to third-party apps.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        denied.forEachIndexed { index, result ->
-                            PropertyRow(result)
-                            if (index < denied.lastIndex) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                        }
-                    }
-                }
-
-                // Unavailable
-                val unavailable = results!!.filter {
-                    it.status == PropertyResult.Status.UNAVAILABLE
-                }
-                if (unavailable.isNotEmpty()) {
-                    VehicleCard(
-                        title = "Not Available (${unavailable.size})",
-                        icon = Icons.Default.RemoveCircleOutline,
-                    ) {
-                        Text(
-                            text = "These properties are not supported on this vehicle hardware.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        unavailable.forEachIndexed { index, result ->
-                            PropertyRow(result)
-                            if (index < unavailable.lastIndex) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                        }
-                    }
-                }
-
-                // Errors (including Car not connected)
-                val errors = results!!.filter {
-                    it.status == PropertyResult.Status.ERROR ||
-                        it.status == PropertyResult.Status.CAR_NOT_CONNECTED
-                }
-                if (errors.isNotEmpty()) {
-                    VehicleCard(
-                        title = "Errors (${errors.size})",
+                        title = "Vehicle Properties",
                         icon = Icons.Default.Error,
                     ) {
-                        errors.forEachIndexed { index, result ->
-                            PropertyRow(result)
-                            if (index < errors.lastIndex) {
-                                Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Failed to access vehicle hardware: ${vehicleData.errorMessage ?: "unknown error"}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colorScheme.error,
+                        )
+                    }
+                }
+
+                VehicleData.ConnectionStatus.CONNECTED -> {
+                    val results = VehicleDataFormatter.format(vehicleData)
+
+                    // Header card with refresh button
+                    VehicleCard(
+                        title = "Vehicle Properties",
+                        icon = Icons.Default.DirectionsCar,
+                    ) {
+                        Text(
+                            text = "Live vehicle data from the Car App Library hardware APIs. " +
+                                "Speed, energy, and mileage update continuously.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colorScheme.onSurfaceVariant,
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            FilledTonalButton(
+                                onClick = {
+                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    VehicleDataManager.requestRefresh()
+                                },
+                                modifier = Modifier.height(AutomotiveDimens.ButtonMinHeight),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Refresh")
+                            }
+
+                            val okCount = results.count { it.status == PropertyResult.Status.OK }
+                            val total = results.size
+                            Text(
+                                text = "$okCount / $total readable",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    // Readable properties
+                    val readable = results.filter { it.status == PropertyResult.Status.OK }
+                    if (readable.isNotEmpty()) {
+                        VehicleCard(
+                            title = "Readable (${readable.size})",
+                            icon = Icons.Default.CheckCircle,
+                        ) {
+                            readable.forEachIndexed { index, result ->
+                                PropertyRow(result)
+                                if (index < readable.lastIndex) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    // Pending (still waiting for data)
+                    val pending = results.filter { it.status == PropertyResult.Status.PENDING }
+                    if (pending.isNotEmpty()) {
+                        VehicleCard(
+                            title = "Pending (${pending.size})",
+                            icon = Icons.Default.HourglassEmpty,
+                        ) {
+                            pending.forEachIndexed { index, result ->
+                                PropertyRow(result)
+                                if (index < pending.lastIndex) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    // Unavailable / Unimplemented
+                    val unavailable = results.filter {
+                        it.status == PropertyResult.Status.UNAVAILABLE ||
+                            it.status == PropertyResult.Status.UNIMPLEMENTED
+                    }
+                    if (unavailable.isNotEmpty()) {
+                        VehicleCard(
+                            title = "Not Available (${unavailable.size})",
+                            icon = Icons.Default.RemoveCircleOutline,
+                        ) {
+                            Text(
+                                text = "These properties are not supported by the vehicle or Templates Host.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            unavailable.forEachIndexed { index, result ->
+                                PropertyRow(result)
+                                if (index < unavailable.lastIndex) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    // Errors
+                    val errors = results.filter { it.status == PropertyResult.Status.ERROR }
+                    if (errors.isNotEmpty()) {
+                        VehicleCard(
+                            title = "Errors (${errors.size})",
+                            icon = Icons.Default.Error,
+                        ) {
+                            errors.forEachIndexed { index, result ->
+                                PropertyRow(result)
+                                if (index < errors.lastIndex) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
                             }
                         }
                     }
@@ -241,10 +225,10 @@ private fun PropertyRow(result: PropertyResult) {
 
     val (statusColor, statusIcon) = when (result.status) {
         PropertyResult.Status.OK -> colorScheme.primary to Icons.Default.CheckCircle
-        PropertyResult.Status.PERMISSION_DENIED -> colorScheme.error to Icons.Default.Lock
-        PropertyResult.Status.UNAVAILABLE -> colorScheme.onSurfaceVariant to Icons.Default.RemoveCircleOutline
-        PropertyResult.Status.ERROR,
-        PropertyResult.Status.CAR_NOT_CONNECTED -> colorScheme.error to Icons.Default.Error
+        PropertyResult.Status.UNAVAILABLE,
+        PropertyResult.Status.UNIMPLEMENTED -> colorScheme.onSurfaceVariant to Icons.Default.RemoveCircleOutline
+        PropertyResult.Status.ERROR -> colorScheme.error to Icons.Default.Error
+        PropertyResult.Status.PENDING -> colorScheme.onSurfaceVariant to Icons.Default.HourglassEmpty
     }
 
     Row(
