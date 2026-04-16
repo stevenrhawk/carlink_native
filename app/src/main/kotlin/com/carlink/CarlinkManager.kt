@@ -1109,6 +1109,36 @@ class CarlinkManager(
     }
 
     /**
+     * Handle USB device attachment event.
+     * Called by MainActivity when USB_DEVICE_ATTACHED broadcast is received
+     * for a known Carlinkit device.
+     *
+     * This catches the case where the adapter re-enumerates after the initial
+     * findDevice() polling window (30s) has expired, avoiding the need for a
+     * manual "Reset Device" press.
+     */
+    fun onUsbDeviceAttached() {
+        logInfo("[USB] Device attached broadcast received", tag = Logger.Tags.USB)
+
+        // Only auto-start if fully disconnected and idle.
+        // CONNECTING means findDevice() is already polling — it will find the device.
+        // DEVICE_CONNECTED/STREAMING mean we're already using a device.
+        if (state != State.DISCONNECTED) {
+            logInfo(
+                "[USB] State is $state, ignoring attach (search or session in progress)",
+                tag = Logger.Tags.USB,
+            )
+            return
+        }
+
+        logInfo("[USB] State is DISCONNECTED — auto-starting connection", tag = Logger.Tags.USB)
+        cancelReconnect()
+        scope.launch(Dispatchers.IO) {
+            start()
+        }
+    }
+
+    /**
      * Resets the H.264 video decoder/renderer.
      *
      * This operation resets the MediaCodec decoder without disconnecting the USB device.
