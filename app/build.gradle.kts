@@ -79,10 +79,6 @@ android {
         }
     }
 
-    // android.car API for reading vehicle properties (speed, fuel, etc.)
-    // This is a system framework library available on AAOS devices
-    useLibrary("android.car")
-
     lint {
         // Suppress DiscouragedApi warning for scheduleAtFixedRate usage.
         // Tested alternatives (coroutines, scheduleWithFixedDelay) caused issues

@@ -197,9 +197,6 @@ class MainActivity : ComponentActivity() {
         // Initialize logging
         initializeLogging()
 
-        // Apply cluster service component state before Templates Host discovers it
-        AdapterConfigPreference.getInstance(this).applyClusterComponentState(this)
-
         // Load display mode preference and apply BEFORE calculating display dimensions
         // This ensures correct viewport sizing - fullscreen immersive uses full screen (1920x1080),
         // other modes use usable area excluding visible system bars
@@ -219,17 +216,14 @@ class MainActivity : ComponentActivity() {
         // after the initial findDevice() polling window has expired
         registerUsbAttachReceiver()
 
-        // Launch CarAppActivity to trigger Templates Host → cluster binding chain.
-        // Skipped entirely when cluster navigation is disabled — no reason to start
-        // the CarAppActivity → RendererService → CarlinkClusterService chain.
-        if (AdapterConfigPreference.getInstance(this).getClusterNavigationSync()) {
-            // Delayed to avoid interrupting USB permission dialog on first connect.
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (!isDestroyed && !isFinishing) {
-                    launchCarAppActivity()
-                }
-            }, 4000)
-        }
+        // Launch CarAppActivity to trigger Templates Host → CarlinkClusterService binding.
+        // Always launched — the session provides CarHardwareManager for vehicle data collection.
+        // Navigation relay is gated on the cluster_navigation preference inside the session.
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isDestroyed && !isFinishing) {
+                launchCarAppActivity()
+            }
+        }, 4000)
 
         // Set up Compose UI
         // CarlinkManager is observed via mutableStateOf — replacement during display mode
@@ -286,11 +280,8 @@ class MainActivity : ComponentActivity() {
         // The "bring back" REORDER_TO_FRONT intent from launchCarAppActivity()
         // also arrives here (singleTop) — must NOT re-trigger the launch cycle.
         if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            // Only launch cluster binding if cluster navigation is enabled
-            if (AdapterConfigPreference.getInstance(this).getClusterNavigationSync()) {
-                logInfo("[LIFECYCLE] onNewIntent: USB_DEVICE_ATTACHED — re-launching cluster binding", tag = "MAIN")
-                launchCarAppActivity()
-            }
+            logInfo("[LIFECYCLE] onNewIntent: USB_DEVICE_ATTACHED — re-launching service binding", tag = "MAIN")
+            launchCarAppActivity()
 
             // Auto-connect when adapter re-enumerates (e.g., after reboot or replug)
             val manager = carlinkManager

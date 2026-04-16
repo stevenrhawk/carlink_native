@@ -21,6 +21,8 @@ import com.carlink.logging.logWarn
 import com.carlink.navigation.NavigationState
 import com.carlink.navigation.NavigationStateManager
 import com.carlink.navigation.TripBuilder
+import com.carlink.platform.VehicleDataManager
+import com.carlink.ui.settings.AdapterConfigPreference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -94,50 +96,53 @@ class ClusterMainSession : Session() {
 
         // --- Everything below runs only for the primary session ---
 
-        // Get NavigationManager — needed for navigationStarted() which triggers cluster creation
-        try {
-            navigationManager = carContext.getCarService(NavigationManager::class.java)
-            logInfo("[CLUSTER_MAIN] NavigationManager obtained", tag = Logger.Tags.CLUSTER)
-        } catch (e: Exception) {
-            logError(
-                "[CLUSTER_MAIN] Failed to get NavigationManager: ${e.message}",
-                tag = Logger.Tags.CLUSTER,
-                throwable = e,
-            )
-        }
+        // Always collect vehicle data via CarHardwareManager (independent of cluster nav preference)
+        VehicleDataManager.startCollecting(carContext)
 
-        // Set NavigationManagerCallback BEFORE calling navigationStarted() — Templates Host
-        // requires the callback to be set first, otherwise navigationStarted() throws.
-        navigationManager?.setNavigationManagerCallback(
-            object : NavigationManagerCallback {
-                override fun onStopNavigation() {
-                    logInfo("[CLUSTER_MAIN] onStopNavigation callback", tag = Logger.Tags.CLUSTER)
-                    isNavigating = false
-                }
-
-                override fun onAutoDriveEnabled() {
-                    logNavi { "[CLUSTER_MAIN] Auto drive enabled" }
-                }
-            },
-        )
-
-        // Call navigationStarted() IMMEDIATELY — this is the critical trigger that causes
-        // Templates Host to create ClusterTurnCardActivity on the cluster display.
-        // Without this, Templates Host never creates the cluster display.
-        try {
-            navigationManager?.navigationStarted()
-            isNavigating = true
-            logInfo("[CLUSTER_MAIN] navigationStarted() called", tag = Logger.Tags.CLUSTER)
-        } catch (e: Exception) {
-            logWarn("[CLUSTER_MAIN] navigationStarted() failed: ${e.message}", tag = Logger.Tags.CLUSTER)
-        }
-
-        // Observe NavigationStateManager to relay Trip updates
         val sessionScope = CoroutineScope(Dispatchers.Main)
         scope = sessionScope
 
-        sessionScope.launch {
-            collectNavigationState()
+        // Navigation relay is conditional on cluster navigation preference
+        val clusterNavEnabled = AdapterConfigPreference.getInstance(carContext).getClusterNavigationSync()
+
+        if (clusterNavEnabled) {
+            try {
+                navigationManager = carContext.getCarService(NavigationManager::class.java)
+                logInfo("[CLUSTER_MAIN] NavigationManager obtained", tag = Logger.Tags.CLUSTER)
+            } catch (e: Exception) {
+                logError(
+                    "[CLUSTER_MAIN] Failed to get NavigationManager: ${e.message}",
+                    tag = Logger.Tags.CLUSTER,
+                    throwable = e,
+                )
+            }
+
+            navigationManager?.setNavigationManagerCallback(
+                object : NavigationManagerCallback {
+                    override fun onStopNavigation() {
+                        logInfo("[CLUSTER_MAIN] onStopNavigation callback", tag = Logger.Tags.CLUSTER)
+                        isNavigating = false
+                    }
+
+                    override fun onAutoDriveEnabled() {
+                        logNavi { "[CLUSTER_MAIN] Auto drive enabled" }
+                    }
+                },
+            )
+
+            try {
+                navigationManager?.navigationStarted()
+                isNavigating = true
+                logInfo("[CLUSTER_MAIN] navigationStarted() called", tag = Logger.Tags.CLUSTER)
+            } catch (e: Exception) {
+                logWarn("[CLUSTER_MAIN] navigationStarted() failed: ${e.message}", tag = Logger.Tags.CLUSTER)
+            }
+
+            sessionScope.launch {
+                collectNavigationState()
+            }
+        } else {
+            logInfo("[CLUSTER_MAIN] Cluster navigation disabled — vehicle data only", tag = Logger.Tags.CLUSTER)
         }
 
         lifecycle.addObserver(
@@ -146,9 +151,10 @@ class ClusterMainSession : Session() {
                     if (isPrimary) {
                         primarySession = null
                         logInfo(
-                            "[CLUSTER_MAIN] Primary session destroyed — releasing NavigationManager ownership",
+                            "[CLUSTER_MAIN] Primary session destroyed — releasing ownership",
                             tag = Logger.Tags.CLUSTER,
                         )
+                        VehicleDataManager.stopCollecting()
                         arrivalTimeoutJob?.cancel()
                         arrivalTimeoutJob = null
                         if (isNavigating) {
