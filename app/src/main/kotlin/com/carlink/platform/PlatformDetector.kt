@@ -7,6 +7,9 @@ import android.os.Build
 import android.util.Log
 import android.view.WindowManager
 import com.carlink.BuildConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * PlatformDetector - Detects hardware platform characteristics for configuration selection.
@@ -29,6 +32,9 @@ import com.carlink.BuildConfig
  */
 object PlatformDetector {
     private const val TAG = "CARLINK_PLATFORM"
+
+    private val _platformInfo = MutableStateFlow<PlatformInfo?>(null)
+    val platformInfo: StateFlow<PlatformInfo?> = _platformInfo.asStateFlow()
 
     /**
      * Platform information data class.
@@ -59,6 +65,10 @@ object PlatformDetector {
         val isBroxton: Boolean = false,
         val displayWidth: Int = 0,
         val displayHeight: Int = 0,
+        val socManufacturer: String = "",
+        val socModel: String = "",
+        val androidVersion: String = "",
+        val cpuCoreCount: Int = 0,
     ) {
         /**
          * Returns true if device is the GM gminfo37 (2400x960 display).
@@ -82,6 +92,7 @@ object PlatformDetector {
 
         override fun toString(): String =
             "PlatformInfo(arch=$cpuArch, intel=$isIntel, gm=$isGmAaos, " +
+                "soc=$socManufacturer $socModel, cores=$cpuCoreCount, android=$androidVersion, " +
                 "hwDecoder=${hardwareH264DecoderName ?: "software"}, " +
                 "nativeRate=${nativeSampleRate}Hz, mfr=$manufacturer, product=$product, device=$device)"
     }
@@ -101,6 +112,10 @@ object PlatformDetector {
         val device = Build.DEVICE ?: ""
         val board = Build.BOARD ?: ""
         val hardware = Build.HARDWARE ?: ""
+        val socManufacturer = Build.SOC_MANUFACTURER ?: ""
+        val socModel = Build.SOC_MODEL ?: ""
+        val androidVersion = Build.VERSION.RELEASE ?: ""
+        val cpuCoreCount = Runtime.getRuntime().availableProcessors()
 
         val isGmAaos = detectGmAaos(manufacturer, product, device)
         val (_, hardwareH264DecoderName) = detectHardwareH264Decoder()
@@ -131,6 +146,10 @@ object PlatformDetector {
                 isBroxton = isBroxton,
                 displayWidth = displayWidth,
                 displayHeight = displayHeight,
+                socManufacturer = socManufacturer,
+                socModel = socModel,
+                androidVersion = androidVersion,
+                cpuCoreCount = cpuCoreCount,
             )
 
         if (BuildConfig.DEBUG) {
@@ -140,6 +159,8 @@ object PlatformDetector {
             Log.i(TAG, "[PLATFORM] GM AAOS audio fixes: ${info.requiresGmAaosAudioFixes()}")
             Log.i(TAG, "[PLATFORM] Broxton platform: $isBroxton, Display: ${displayWidth}x$displayHeight")
         }
+
+        _platformInfo.value = info
 
         return info
     }

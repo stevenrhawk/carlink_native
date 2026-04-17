@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.carlink.platform.PlatformDetector
 import com.carlink.platform.PropertyResult
 import com.carlink.platform.VehicleData
 import com.carlink.platform.VehicleDataFormatter
@@ -51,6 +52,7 @@ fun VehicleDataTab() {
     val view = LocalView.current
     val colorScheme = MaterialTheme.colorScheme
     val vehicleData by VehicleDataManager.state.collectAsStateWithLifecycle()
+    val platformInfo by PlatformDetector.platformInfo.collectAsStateWithLifecycle()
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -64,6 +66,10 @@ fun VehicleDataTab() {
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            platformInfo?.let { info ->
+                HardwareInfoCard(info)
+            }
+
             when (vehicleData.status) {
                 VehicleData.ConnectionStatus.WAITING_FOR_SERVICE -> {
                     VehicleCard(
@@ -305,5 +311,51 @@ private fun VehicleCard(
 
             content()
         }
+    }
+}
+
+@Composable
+private fun HardwareInfoCard(info: PlatformDetector.PlatformInfo) {
+    VehicleCard(
+        title = "Hardware Info",
+        icon = Icons.Default.Info,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            HardwareRow("SoC", "${info.socManufacturer} ${info.socModel}".trim())
+            HardwareRow("CPU", "${info.cpuArch}, ${info.cpuCoreCount} cores")
+            HardwareRow("Android", info.androidVersion)
+            HardwareRow(
+                "Display",
+                if (info.displayWidth > 0) "${info.displayWidth} x ${info.displayHeight}" else "Unknown",
+            )
+            HardwareRow("Video Decoder", info.hardwareH264DecoderName ?: "Software")
+            HardwareRow("Audio Sample Rate", "${info.nativeSampleRate} Hz")
+        }
+    }
+}
+
+@Composable
+private fun HardwareRow(label: String, value: String) {
+    val colorScheme = MaterialTheme.colorScheme
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
