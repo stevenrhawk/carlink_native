@@ -15,6 +15,18 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
 
+    <!-- AAOS vehicle data permissions (signature|privileged).
+         Declared to match Home Assistant's known-working layout. On a retail
+         GM AAOS head unit these will be denied at install time because the APK
+         is not in /system/priv-app with matching allowlist; CarInfo listeners
+         will silently never fire. Unlocks data only on rooted/dev head units
+         or privileged OEM builds. CAR_MILEAGE omitted per Play Store policy. -->
+    <uses-permission android:name="android.car.permission.CAR_INFO" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY_PORTS" />
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+    <uses-permission android:name="android.car.permission.READ_CAR_DISPLAY_UNITS" />
+
     <!-- USB Host Feature (required) -->
     <uses-feature
         android:name="android.hardware.usb.host"

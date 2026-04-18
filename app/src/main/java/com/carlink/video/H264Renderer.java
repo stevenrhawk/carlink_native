@@ -729,7 +729,20 @@ public class H264Renderer {
         // Matches the proven Autokit AvcDecoder approach that avoids P-frame corruption.
         MediaFormat mediaformat = MediaFormat.createVideoFormat("video/avc", width, height);
 
-        log("Init: " + codecName + " @ " + width + "x" + height + " (bare format, sync mode)");
+        // Qualcomm c2.qti decoder (SA8155P etc.) reliably honors low-latency hints
+        // without the P-frame corruption seen on Intel. Enabling them here trims
+        // ~30-50ms of glass-to-glass latency. Gated by codec name so Intel and
+        // other vendors keep the conservative bare-format path.
+        boolean qtiCodec = codecName != null && codecName.startsWith("c2.qti.");
+        String formatMode = "bare format, sync mode";
+        if (qtiCodec) {
+            mediaformat.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+            mediaformat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+            mediaformat.setInteger(MediaFormat.KEY_OPERATING_RATE, 120);
+            formatMode = "qti low-latency, sync mode";
+        }
+
+        log("Init: " + codecName + " @ " + width + "x" + height + " (" + formatMode + ")");
 
         // NO setCallback — sync mode uses dequeueInputBuffer/dequeueOutputBuffer
         mCodec.configure(mediaformat, surface, null, 0);

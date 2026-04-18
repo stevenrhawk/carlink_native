@@ -1,5 +1,6 @@
 package com.carlink.platform
 
+import android.content.pm.PackageManager
 import androidx.car.app.CarContext
 import androidx.car.app.hardware.CarHardwareManager
 import androidx.car.app.hardware.common.CarValue
@@ -74,7 +75,34 @@ object VehicleDataManager {
     private var evStatusListener: OnCarDataAvailableListener<EvStatus>? = null
     private var tollListener: OnCarDataAvailableListener<TollCard>? = null
 
+    // Vehicle data permissions are signature|privileged on AAOS. If the APK is
+    // not in /system/priv-app with a matching allowlist, these are denied and
+    // CarInfo listeners silently never fire — without this check the UI would
+    // be stuck on "Waiting..." forever with no indication why.
+    private val requiredPermissions = listOf(
+        "android.car.permission.CAR_INFO",
+        "android.car.permission.CAR_ENERGY",
+        "android.car.permission.CAR_ENERGY_PORTS",
+        "android.car.permission.CAR_SPEED",
+        "android.car.permission.READ_CAR_DISPLAY_UNITS",
+    )
+
     fun startCollecting(carContext: CarContext) {
+        val denied = requiredPermissions.filter {
+            carContext.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (denied.isNotEmpty()) {
+            val shortNames = denied.map { it.substringAfterLast('.') }
+            val msg = "Vehicle data unavailable — privileged permissions denied: ${shortNames.joinToString(", ")}. " +
+                "Requires system app install (/system/priv-app + allowlist) or OEM signing."
+            logWarn("[VEHICLE] $msg", tag = Logger.Tags.PLATFORM)
+            _state.value = VehicleData(
+                status = VehicleData.ConnectionStatus.ERROR,
+                errorMessage = msg,
+            )
+            return
+        }
+
         try {
             val hardwareManager = carContext.getCarService(CarHardwareManager::class.java)
             carInfo = hardwareManager.carInfo

@@ -57,6 +57,14 @@ Carlink Native is a Kotlin Android app that bridges iPhone CarPlay and Android A
 
 From README: "Projection streams are live UI state, not video playback." Video is best-effort and disposable (drop late frames, reset on corruption, never wait). Audio is a continuous time signal (buffer aggressively, never stall, never block video). Correctness is defined by latency, not completeness.
 
+### Vehicle Data via CarHardwareManager (AAOS)
+
+`VehicleDataManager` subscribes to `androidx.car.app.hardware.CarInfo` via the cluster `CarAppService`. The permissions it requires (`android.car.permission.CAR_INFO`, `CAR_ENERGY`, `CAR_ENERGY_PORTS`, `CAR_SPEED`, `READ_CAR_DISPLAY_UNITS`) are declared `signature|privileged` in AOSP's `packages/services/Car`. **On a retail GM AAOS head unit this data is unreachable** — an unprivileged APK is silently denied with no user-visible prompt. The manifest declarations exist for parity with Home Assistant's known-working layout and to unblock the data if ever sideloaded into `/system/priv-app` with a matching allowlist. `VehicleDataManager.startCollecting` checks `checkSelfPermission` up front and surfaces an explicit error instead of leaving the UI stuck on "Waiting...". `CAR_MILEAGE` is intentionally omitted per Play Store policy.
+
+### Qualcomm SA8155P Optimizations
+
+Target Blazer EV head unit is Qualcomm SA8155P (arm64, `c2.qti.avc.decoder`). `H264Renderer.initCodec` probes for `c2.qti.*` by codec name and enables `KEY_LOW_LATENCY`, `KEY_PRIORITY=0`, and `KEY_OPERATING_RATE=120` only on that path — the conservative bare-format config used for Intel `gminfo3.7` is preserved as the fallback to avoid reintroducing the P-frame corruption documented in `revisions.txt`. `abiFilters = ["arm64-v8a"]` trims the APK since no other ABI is ever used. CPU-affinity pinning of USB-read / codec / audio threads is a deferred optimization — it requires adding NDK/JNI to the build pipeline and is not worth the complexity until profiling shows the scheduler is the bottleneck.
+
 ## Lint Suppressions
 
 These are intentional and documented in `app/build.gradle.kts`:

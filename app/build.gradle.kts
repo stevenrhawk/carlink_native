@@ -50,6 +50,13 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Target hardware (Qualcomm SA8155P on GM AAOS, Silverado gminfo3.7)
+        // is exclusively arm64. Filtering out other ABIs shrinks the APK and
+        // removes unused native code surface.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
